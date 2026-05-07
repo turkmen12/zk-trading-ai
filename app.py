@@ -8,14 +8,15 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # 🎨 إعدادات الواجهة
-st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="")
+st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="📈")
 st.markdown("""
 <style>
     .stTabs [data-baseweb="tab-list"] button {font-size: 14px; font-weight: 600; padding: 8px 16px;}
     .signal-box {background: #0e1117; border-left: 4px solid #00ff00; padding: 15px; border-radius: 8px; margin: 10px 0;}
     .signal-sell {border-left-color: #ff4444;}
-    .tp-stage {display: inline-block; background: #1a1d24; padding: 5px 10px; margin: 3px; border-radius: 5px; font-weight: bold;}
+    .tp-stage {display: inline-block; background: #1a1d24; padding: 6px 12px; margin: 4px; border-radius: 6px; font-weight: bold; font-size: 0.9rem;}
     .metric-card {background: #1a1d24; border-radius: 10px; padding: 15px; text-align: center;}
+    .info-pill {background: #262730; padding: 5px 12px; border-radius: 15px; font-size: 0.85rem; color: #ddd;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -46,6 +47,12 @@ def calc_indicators(df):
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     return df
 
+def get_pip_size(price):
+    """يحدد حجم البييب السوقي حسب قيمة الأصل لضمان دقة الحسابات"""
+    if price > 5000: return 1.0      # كريبتو عالي القيمة
+    elif price > 50: return 0.1      # ذهب، مؤشرات، أسهم (يطابق مثالك: فرق 20 = 200 بيب)
+    else: return 0.0001              # فوركس (1 بيب = 0.0001)
+
 def get_ai_signal(df):
     price = get_scalar(df['Close'])
     rsi = get_scalar(df['RSI']) if not pd.isna(df['RSI'].iloc[-1]) else 50
@@ -53,6 +60,7 @@ def get_ai_signal(df):
     macd = get_scalar(df['MACD'])
     sig = get_scalar(df['MACD_Signal'])
     
+    # تقييم الذكاء الاصطناعي
     score = 50
     if rsi < 30: score += 15
     elif rsi > 70: score -= 15
@@ -64,17 +72,20 @@ def get_ai_signal(df):
     direction = "شراء 🟢" if score >= 60 else "بيع 🔴" if score <= 40 else "انتظار ⚪"
     mult = 1 if "شراء" in direction else -1
     
-    # ✅ وقف الخسارة: لا يتجاوز 200 نقطة
-    sl = price - (200 * mult)
+    pip_size = get_pip_size(price)
     
-    # ✅ جني الأرباح: 3 مراحل بمجموع 500 نقطة (150 + 150 + 200)
-    tp1 = price + (150 * mult)
-    tp2 = price + (300 * mult)
-    tp3 = price + (500 * mult)
+    # ✅ مسافات ثابتة بالبييب حسب طلبك
+    SL_PIPS = 200
+    TP1_PIPS, TP2_PIPS, TP3_PIPS = 150, 300, 500
     
-    return direction, score, price, sl, tp1, tp2, tp3
+    sl = price - (SL_PIPS * pip_size * mult)
+    tp1 = price + (TP1_PIPS * pip_size * mult)
+    tp2 = price + (TP2_PIPS * pip_size * mult)
+    tp3 = price + (TP3_PIPS * pip_size * mult)
+    
+    return direction, score, price, sl, tp1, tp2, tp3, pip_size, SL_PIPS
 
-# 🧠 إدارة الحالة للتفاعل الفوري
+#  إدارة الحالة للتفاعل الفوري
 if 'df' not in st.session_state: st.session_state.df = None
 if 'meta' not in st.session_state: st.session_state.meta = {}
 
@@ -100,13 +111,13 @@ with st.sidebar:
                 if isinstance(df_raw.columns, pd.MultiIndex): df_raw.columns = df_raw.columns.droplevel(1)
                 st.session_state.df = calc_indicators(df_raw)
                 st.session_state.meta = {"symbol": symbol, "interval": interval, "name": selected_name if not use_custom else symbol}
-                st.success("✅ تم تحديث البيانات بنجاح!")
+                st.success("✅ تم تحديث البيانات!")
             except Exception as e: st.error(f"❌ فشل الجلب: {e}")
     
     st.divider()
     st.subheader("🎛️ المؤشرات (تفاعل فوري)")
     show_gann = st.checkbox("📐 زوايا Gann", True)
-    show_smc = st.checkbox(" مناطق SMC/ICT", True)
+    show_smc = st.checkbox("🏦 مناطق SMC/ICT", True)
     show_elliott = st.checkbox("🌊 موجات Elliott", False)
     show_macd = st.checkbox("📉 مؤشر MACD", False)
 
@@ -114,27 +125,32 @@ with st.sidebar:
 if st.session_state.df is not None:
     df = st.session_state.df
     meta = st.session_state.meta
-    direction, score, price, sl, tp1, tp2, tp3 = get_ai_signal(df)
+    direction, score, price, sl, tp1, tp2, tp3, pip_size, SL_PIPS = get_ai_signal(df)
     
     is_buy = "شراء" in direction
     css_class = "signal-box" if is_buy else "signal-box signal-sell"
     
-    # 📊 عرض ملخص الإشارة الذكي (محدّث)
+    # تنسيق عشري ديناميكي حسب الأصل
+    dec = 4 if pip_size < 0.01 else 2
+    
+    # 📊 صندوق التوصية الذكي (مطابق لمثالك تماماً)
     st.markdown(f"""
     <div class="{css_class}">
-        <h3 style="margin:0;"> توصية الذكاء الاصطناعي: {direction} (قوة: {score}/100)</h3>
-        <p style="margin:8px 0 5px; color:#ccc;">📍 سعر الدخول الحالي: <b>{price:.2f}</b></p>
-        <p style="margin:0 0 8px; color:#ff6b6b; font-weight:bold;">🛑 وقف الخسارة (Max 200pt): <b>{sl:.2f}</b></p>
-        <div style="margin-top:5px;">
-            <span style="color:#aaa; font-size:0.9rem;">🎯 أهداف جني الأرباح (مجموع 500 نقطة):</span><br>
-            <span class="tp-stage" style="color:#4cd137;">المرحلة 1: {tp1:.2f} (+150)</span>
-            <span class="tp-stage" style="color:#fbc531;">المرحلة 2: {tp2:.2f} (+300)</span>
-            <span class="tp-stage" style="color:#e84118;">المرحلة 3: {tp3:.2f} (+500)</span>
+        <h3 style="margin:0; font-size:1.3rem;">🤖 توصية النظام: {direction} (قوة: {score}/100)</h3>
+        <div style="margin:10px 0; display:flex; gap:10px; flex-wrap:wrap;">
+            <span class="info-pill">📍 الدخول: <b>{price:.{dec}f}</b></span>
+            <span class="info-pill" style="color:#ff6b6b; border:1px solid #ff6b6b;">🛑 وقف خسارة {SL_PIPS} بيب: <b>{sl:.{dec}f}</b></span>
+        </div>
+        <div style="margin-top:8px;">
+            <span style="color:#aaa; font-size:0.85rem;">🎯 أهداف جني الأرباح (إجمالي 500 بيب):</span><br>
+            <span class="tp-stage" style="color:#4cd137;">المرحلة 1: {tp1:.{dec}f} (+150 بيب)</span>
+            <span class="tp-stage" style="color:#fbc531;">المرحلة 2: {tp2:.{dec}f} (+300 بيب)</span>
+            <span class="tp-stage" style="color:#e84118;">المرحلة 3: {tp3:.{dec}f} (+500 بيب)</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
 
-    #  بناء الشارت الديناميكي
+    # 📈 بناء الشارت الديناميكي
     rows, heights = (3, [0.5, 0.2, 0.3]) if show_macd else (2, [0.7, 0.3])
     titles = ("السعر", "MACD", "الحجم") if show_macd else ("السعر", "RSI")
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
@@ -179,26 +195,26 @@ if st.session_state.df is not None:
     fig.update_layout(height=750, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
 
-    # 📑 التبويبات
+    #  التبويبات
     tab_risk, tab_matrix, tab_export = st.tabs(["🛡️ إدارة المخاطر", "📡 مصفوفة الأطر", "💾 تصدير"])
     
     with tab_risk:
-        st.subheader("🛡️ حاسبة إدارة رأس المال (بناءً على SL=200 نقطة)")
-        c1, c2 = st.columns(2)
-        capital = c1.number_input("💰 رأس المال ($)", min_value=100.0, value=1000.0, step=100.0)
-        risk_pct = c2.slider("⚖️ نسبة المخاطرة لكل صفقة (%)", 0.5, 5.0, 1.0, step=0.1)
-        
-        sl_dist = 200 # ثابت حسب طلبك
-        risk_amount = capital * (risk_pct / 100)
-        position_size = risk_amount / sl_dist if sl_dist > 0 else 0
+        st.subheader("🛡️ حاسبة إدارة رأس المال (معيارية)")
+        c1, c2, c3 = st.columns(3)
+        lot_size = c1.number_input("📦 حجم اللوت", min_value=0.01, value=0.01, step=0.01)
+        risk_per_pip_std = 10.0 # 10$ للبييب لكل 1.0 لوت قياسي
+        total_risk_usd = lot_size * SL_PIPS * risk_per_pip_std
+        potential_profit_usd = lot_size * 500 * risk_per_pip_std
         
         col_a, col_b, col_c = st.columns(3)
-        col_a.metric("📦 حجم الصفقة", f"{position_size:.3f} وحدة")
-        col_b.metric("💸 مبلغ المخاطرة", f"${risk_amount:.2f}")
-        col_c.metric("📊 العائد عند TP3", f"{(500/sl_dist):.2f}R")
+        col_a.metric("💸 مخاطرة الصفقة (SL)", f"${total_risk_usd:.2f}")
+        col_b.metric("💰 ربح الصفقة الكامل (TP3)", f"${potential_profit_usd:.2f}")
+        col_c.metric("📊 نسبة العائد للمخاطرة", f"{500/SL_PIPS:.1f}R")
+        
+        st.caption(f"📏 المعادلة: اللوت ({lot_size}) × عدد البييبات ({SL_PIPS}) × قيمة البييب القياسي ($10) = ${total_risk_usd:.2f}")
 
     with tab_matrix:
-        st.subheader(" توافق الإشارات عبر الأطر الزمنية")
+        st.subheader("📡 توافق الإشارات عبر الأطر")
         tf_data = []
         for tf in ["15m", "1h", "4h", "1d"]:
             try:
@@ -206,17 +222,19 @@ if st.session_state.df is not None:
                 if d.empty or len(d) < 20: continue
                 if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
                 d = calc_indicators(d)
-                _, sc, _, _, _, _, _ = get_ai_signal(d)
-                sig = "شراء 🟢" if sc>=60 else "بيع 🔴" if sc<=40 else "محايد ⚪"
+                _, sc, _, _, _, _, _, _, _ = get_ai_signal(d)
+                sig = "شراء " if sc>=60 else "بيع 🔴" if sc<=40 else "محايد "
                 tf_data.append({"الإطار": tf, "التقييم": f"{sc}/100", "الاتجاه": sig})
             except: pass
-        if tf_data: st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
-        else: st.info("لا تتوفر بيانات كافية حالياً.")
+        if tf_data: 
+            st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
+        else: 
+            st.info("لا تتوفر بيانات كافية حالياً.")
 
     with tab_export:
         csv = df.to_csv().encode('utf-8')
-        st.download_button(" تحميل البيانات (CSV)", csv, f"{meta['symbol']}_data.csv", "text/csv")
+        st.download_button("📥 تحميل البيانات (CSV)", csv, f"{meta['symbol']}_data.csv", "text/csv")
         st.download_button("🖼️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{meta['symbol']}_chart.html", "text/html")
 
 else:
-    st.info(" اختر الأصل من القائمة الجانبية ثم اضغط  جلب البيانات لتحديث الشارت.")
+    st.info("👈 اختر الأصل واضغط 🔄 جلب البيانات لبدء التحليل.")
