@@ -315,7 +315,7 @@ if st.session_state.df is not None:
         col_c.metric(" نسبة العائد للمخاطرة", f"{500/SL_PIPS:.1f}R")
         st.caption(f" المعادلة: اللوت ({lot_size}) × البييبات ({SL_PIPS}) × القيمة ($10) = ${total_risk_usd:.2f}")
 
-    with tab_matrix:
+        with tab_matrix:
         st.subheader("📡 توافق الإشارات عبر الأطر")
         tf_data = []
         for tf in ["15m", "1h", "4h", "1d"]:
@@ -325,18 +325,10 @@ if st.session_state.df is not None:
                 if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
                 d = calc_indicators(d)
                 _, sc, _, _, _, _, _, _, _ = get_ai_signal(d)
-                sig = "شراء " if sc>=60 else "بيع 🔴" if sc<=40 else "محايد "
+                sig = "شراء 🟢" if sc>=60 else "بيع 🔴" if sc<=40 else "محايد ⚪"
                 tf_data.append({"الإطار": tf, "التقييم": f"{sc}/100", "الاتجاه": sig})
             except: pass
-                if len(tf_data) > 0:
+        if len(tf_data) > 0:
             st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
         else:
             st.info("لا تتوفر بيانات كافية حالياً.")
-
-    with tab_export:
-        csv = df.to_csv().encode('utf-8')
-        st.download_button("📥 تحميل البيانات (CSV)", csv, f"{meta['symbol']}_data.csv", "text/csv")
-        st.download_button("🖼️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{meta['symbol']}_chart.html", "text/html")
-
-else:
-    st.info("👈 اختر الأصل واضغط 🔄 جلب البيانات لبدء التحليل.")
