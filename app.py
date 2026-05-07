@@ -328,9 +328,9 @@ if st.session_state.df is not None:
                 sig = "شراء " if sc>=60 else "بيع 🔴" if sc<=40 else "محايد "
                 tf_data.append({"الإطار": tf, "التقييم": f"{sc}/100", "الاتجاه": sig})
             except: pass
-        if tf_ 
+                if len(tf_data) > 0:
             st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
-        else: 
+        else:
             st.info("لا تتوفر بيانات كافية حالياً.")
 
     with tab_export:
