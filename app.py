@@ -7,22 +7,26 @@ import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
+# 🎨 إعدادات الواجهة
 st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="📈")
 st.markdown("""
 <style>
     .stTabs [data-baseweb="tab-list"] button {font-size: 14px; font-weight: 600; padding: 8px 16px;}
-    .metric-box {background: #0e1117; border: 1px solid #262730; border-radius: 8px; padding: 12px; text-align: center;}
-    div[data-testid="stVerticalBlock"] > div {margin-bottom: 8px;}
+    .signal-box {background: #0e1117; border-left: 4px solid #00ff00; padding: 15px; border-radius: 8px; margin: 10px 0;}
+    .signal-sell {border-left-color: #ff4444;}
+    .metric-card {background: #1a1d24; border-radius: 10px; padding: 15px; text-align: center;}
 </style>
 """, unsafe_allow_html=True)
 
+# 📦 قاعدة الأصول
 ASSETS_DB = {
     "🥇 الذهب (Gold)": "GC=F", "🥈 الفضة (Silver)": "SI=F", "🛢️ النفط (Oil)": "CL=F",
-    " S&P 500": "^GSPC", "💻 Nasdaq": "^IXIC", "🇬🇧 FTSE 100": "^FTSE",
-    " Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
+    "📈 S&P 500": "^GSPC", " Nasdaq": "^IXIC", "🇬🇧 FTSE 100": "^FTSE",
+    "₿ Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
     "💷 GBP/USD": "GBPUSD=X", "🍎 Apple": "AAPL", "🚗 Tesla": "TSLA"
 }
 
+# 🔧 دوال مساعدة
 def get_scalar(series):
     if hasattr(series, 'iloc'):
         val = series.iloc[-1]
@@ -43,32 +47,47 @@ def calc_macd(df):
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     signal = macd.ewm(span=9, adjust=False).mean()
-    hist = macd - signal
-    return macd, signal, hist
+    return macd, signal
 
-def calc_bollinger(df, period=20, std_dev=2):
-    sma = df['Close'].rolling(window=period).mean()
-    std = df['Close'].rolling(window=period).std()
-    return sma, sma + (std * std_dev), sma - (std * std_dev)
+def calc_indicators(df):
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+    df['RSI'] = 100 - (100 / (1 + gain/loss))
+    df['SMA_50'] = df['Close'].rolling(50).mean()
+    df['ATR'] = calc_atr(df)
+    macd, sig = calc_macd(df)
+    df['MACD'] = macd
+    df['MACD_Signal'] = sig
+    return df
 
-def get_ai_score(df):
-    try:
-        price = get_scalar(df['Close'])
-        rsi = get_scalar(df['RSI']) if not pd.isna(df['RSI'].iloc[-1]) else 50
-        sma50 = get_scalar(df['SMA_50']) if not pd.isna(df['SMA_50'].iloc[-1]) else 0
-        macd, sig, _ = calc_macd(df)
-        m_val, s_val = get_scalar(macd), get_scalar(sig)
-        
-        score = 50
-        if rsi < 30: score += 15
-        elif rsi > 70: score -= 15
-        if sma50 > 0 and price > sma50: score += 10
-        elif sma50 > 0 and price < sma50: score -= 10
-        if m_val > s_val: score += 10
-        else: score -= 10
-        return score
-    except: return 50
+def get_ai_signal(df):
+    price = get_scalar(df['Close'])
+    rsi = get_scalar(df['RSI']) if not pd.isna(df['RSI'].iloc[-1]) else 50
+    sma50 = get_scalar(df['SMA_50']) if not pd.isna(df['SMA_50'].iloc[-1]) else 0
+    macd = get_scalar(df['MACD'])
+    sig = get_scalar(df['MACD_Signal'])
+    atr = get_scalar(df['ATR']) if not pd.isna(df['ATR'].iloc[-1]) else 0
+    
+    score = 50
+    if rsi < 30: score += 15
+    elif rsi > 70: score -= 15
+    if sma50 > 0 and price > sma50: score += 10
+    elif sma50 > 0 and price < sma50: score -= 10
+    if macd > sig: score += 10
+    else: score -= 10
+    
+    direction = "شراء 🟢" if score >= 60 else "بيع 🔴" if score <= 40 else "انتظار ⚪"
+    sl = price - (2 * atr) if atr > 0 else price * 0.98
+    tp = price + (3 * atr) if atr > 0 else price * 1.04
+    
+    return direction, score, price, sl, tp, atr
 
+#  إدارة الحالة (Session State) لتفاعل فوري
+if 'df' not in st.session_state: st.session_state.df = None
+if 'meta' not in st.session_state: st.session_state.meta = {}
+
+# 🖥️ الشريط الجانبي
 with st.sidebar:
     st.header("⚙️ الإعدادات")
     search = st.text_input("🔍 بحث عن أصل", "")
@@ -79,133 +98,137 @@ with st.sidebar:
     use_custom = st.checkbox("📝 رمز مخصص")
     if use_custom: symbol = st.text_input("الرمز", symbol).strip().upper()
     
-    st.divider()
     period = st.selectbox("المدة", ["1mo", "3mo", "6mo", "1y"], index=2)
     interval = st.selectbox("الإطار", ["1d", "4h", "1h", "15m"], index=0)
     
-    st.subheader("المؤشرات")
-    show_gann = st.checkbox("📐 Gann", True)
-    show_smc = st.checkbox("🏦 SMC/ICT", True)
-    show_elliott = st.checkbox("🌊 Elliott", False)
-    show_bb = st.checkbox("📊 Bollinger Bands", False)
-    show_macd = st.checkbox("📉 MACD", False)
+    # أزرار تحديث وتجديد
+    if st.button("🔄 جلب البيانات وتحديث", type="primary"):
+        with st.spinner("⏳ جاري الاتصال بالبورصة..."):
+            try:
+                df_raw = yf.download(symbol, period=period, interval=interval, progress=False)
+                if df_raw.empty: st.error("❌ بيانات فارغة."); st.stop()
+                if isinstance(df_raw.columns, pd.MultiIndex): df_raw.columns = df_raw.columns.droplevel(1)
+                df_calc = calc_indicators(df_raw)
+                st.session_state.df = df_calc
+                st.session_state.meta = {"symbol": symbol, "interval": interval, "name": selected_name if not use_custom else symbol}
+                st.success("✅ تم تحديث البيانات بنجاح!")
+            except Exception as e:
+                st.error(f" فشل الجلب: {e}")
+    
+    st.divider()
+    st.subheader("🎛️ المؤشرات (تفاعل فوري)")
+    show_gann = st.checkbox("📐 زوايا Gann", True)
+    show_smc = st.checkbox(" مناطق SMC/ICT", True)
+    show_elliott = st.checkbox("🌊 موجات Elliott", False)
+    show_macd = st.checkbox("📉 مؤشر MACD", False)
 
-if st.sidebar.button("▶️ تشغيل التحليل", type="primary"):
-    with st.spinner("⏳ جاري المعالجة..."):
-        try:
-            df = yf.download(symbol, period=period, interval=interval, progress=False)
-            if df.empty: st.error("❌ بيانات فارغة. جرب رمزاً آخر أو مدة أطول."); st.stop()
-            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.droplevel(1)
+#  المنطق الرئيسي
+if st.session_state.df is not None:
+    df = st.session_state.df
+    meta = st.session_state.meta
+    direction, score, price, sl, tp, atr = get_ai_signal(df)
+    
+    #  عرض ملخص الإشارة الذكي
+    is_buy = "شراء" in direction
+    css_class = "signal-box" if is_buy else "signal-box signal-sell"
+    st.markdown(f"""
+    <div class="{css_class}">
+        <h3 style="margin:0;">🤖 توصية الذكاء الاصطناعي: {direction} (قوة: {score}/100)</h3>
+        <p style="margin:5px 0 0; color:#aaa;">
+        📍 الدخول: <b>{price:.2f}</b> | 
+        🛑 وقف الخسارة: <b>{sl:.2f}</b> | 
+        🎯 جني الأرباح: <b>{tp:.2f}</b>
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 📈 بناء الشارت الديناميكي
+    rows, heights = (3, [0.5, 0.2, 0.3]) if show_macd else (2, [0.7, 0.3])
+    titles = ("السعر", "MACD", "الحجم") if show_macd else ("السعر", "RSI")
+    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
+                        row_heights=heights, subplot_titles=titles)
+    
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="سعر"), row=1, col=1)
+    
+    if show_gann:
+        rng = df['High'].max() - df['Low'].min()
+        gann = df['Low'].min() + np.arange(len(df)) * (rng/len(df))
+        fig.add_trace(go.Scatter(x=df.index, y=gann, mode="lines", name="Gann 1x1", line=dict(color="purple", dash="dash", width=2)), row=1, col=1)
+        
+    if show_smc:
+        for i in range(2, len(df)):
+            if float(df['Low'].iloc[i]) > float(df['High'].iloc[i-2]):
+                fig.add_shape(type="rect", xref="x", yref="y", x0=df.index[i-2], y0=float(df['High'].iloc[i-2]),
+                              x1=df.index[i], y1=float(df['Low'].iloc[i]), fillcolor="rgba(0,255,0,0.15)", line=dict(width=0), layer="below", row=1, col=1)
+                
+    if show_elliott:
+        peaks = df[(df['High']==df['High'].rolling(5,center=True).max()) & (df['High'].diff()>0)]
+        troughs = df[(df['Low']==df['Low'].rolling(5,center=True).min()) & (df['Low'].diff()<0)]
+        fig.add_trace(go.Scatter(x=peaks.index, y=peaks['High'], mode="markers", name="قمم", marker=dict(color="red", symbol="triangle-down", size=10)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=troughs.index, y=troughs['Low'], mode="markers", name="قيعان", marker=dict(color="blue", symbol="triangle-up", size=10)), row=1, col=1)
+
+    rsi_row = 2 if not show_macd else 3
+    fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], mode="lines", name="RSI", line=dict(color="cyan")), row=rsi_row, col=1)
+    fig.add_hline(y=70, line_dash="dot", line_color="red", row=rsi_row, col=1)
+    fig.add_hline(y=30, line_dash="dot", line_color="green", row=rsi_row, col=1)
+    
+    if show_macd:
+        hist = df['MACD'] - df['MACD_Signal']
+        colors = ['green' if x>0 else 'red' for x in hist]
+        fig.add_trace(go.Bar(x=df.index, y=hist, name="MACD Hist", marker_color=colors), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], mode="lines", name="MACD", line=dict(color="blue")), row=2, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], mode="lines", name="Signal", line=dict(color="orange")), row=2, col=1)
+        
+    vol_row = rows
+    if 'Volume' in df.columns:
+        v_colors = ['#26a69a' if c>=o else '#ef5350' for c,o in zip(df['Close'], df['Open'])]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume", marker_color=v_colors), row=vol_row, col=1)
+        
+    fig.update_layout(height=750, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # 📑 التبويبات الإضافية
+    tab_risk, tab_matrix, tab_export = st.tabs(["🛡️ إدارة المخاطر", "📡 مصفوفة الأطر", " تصدير"])
+    
+    with tab_risk:
+        st.subheader("🛡️ حاسبة إدارة رأس المال")
+        c1, c2, c3 = st.columns(3)
+        capital = c1.number_input("💰 رأس المال ($)", min_value=100.0, value=1000.0, step=100.0)
+        risk_pct = c2.slider("⚖️ نسبة المخاطرة لكل صفقة (%)", 0.5, 5.0, 1.0, step=0.1)
+        entry_price = c3.number_input("📍 سعر الدخول الفعلي", value=float(price))
+        
+        if atr > 0:
+            sl_dist = abs(entry_price - sl)
+            risk_amount = capital * (risk_pct / 100)
+            position_size = risk_amount / sl_dist if sl_dist > 0 else 0
             
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            df['RSI'] = 100 - (100 / (1 + gain/loss))
-            df['SMA_50'] = df['Close'].rolling(50).mean()
-            macd_line, sig_line, hist = calc_macd(df)
-            bb_mid, bb_up, bb_low = calc_bollinger(df)
-            atr_val = calc_atr(df)
-            score = get_ai_score(df)
-            
-            last_price = get_scalar(df['Close'])
-            last_rsi = get_scalar(df['RSI']) if not pd.isna(df['RSI'].iloc[-1]) else 50
-            
-            tab1, tab2, tab3, tab4 = st.tabs(["📈 الشارت المتقدم", "📡 مصفوفة الإشارات", "🛡️ إدارة المخاطر", "💾 تصدير البيانات"])
-            
-            with tab1:
-                c1, c2, c3 = st.columns(3)
-                c1.metric("💰 السعر", f"${last_price:.2f}")
-                c2.metric("📊 RSI", f"{last_rsi:.1f}")
-                c3.metric("🤖 التقييم", f"{score}/100")
-                
-                rows, heights = (3, [0.5, 0.2, 0.3]) if show_macd else (2, [0.7, 0.3])
-                titles = ("السعر", "MACD", "الحجم") if show_macd else ("السعر", "RSI")
-                fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
-                                    row_heights=heights, subplot_titles=titles)
-                
-                fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="سعر"), row=1, col=1)
-                if show_bb:
-                    fig.add_trace(go.Scatter(x=df.index, y=bb_up, mode="lines", name="BB Upper", line=dict(color="gray", dash="dot")), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=bb_low, mode="lines", name="BB Lower", line=dict(color="gray", dash="dot")), row=1, col=1)
-                if show_gann:
-                    rng = df['High'].max() - df['Low'].min()
-                    fig.add_trace(go.Scatter(x=df.index, y=df['Low'].min() + np.arange(len(df)) * (rng/len(df)), mode="lines", name="Gann 1x1", line=dict(color="purple", dash="dash")), row=1, col=1)
-                if show_smc:
-                    for i in range(2, len(df)):
-                        if float(df['Low'].iloc[i]) > float(df['High'].iloc[i-2]):
-                            fig.add_shape(type="rect", xref="x", yref="y", x0=df.index[i-2], y0=float(df['High'].iloc[i-2]),
-                                          x1=df.index[i], y1=float(df['Low'].iloc[i]), fillcolor="rgba(0,255,0,0.1)", line=dict(width=0), layer="below", row=1, col=1)
-                if show_elliott:
-                    peaks = df[(df['High']==df['High'].rolling(5,center=True).max()) & (df['High'].diff()>0)]
-                    troughs = df[(df['Low']==df['Low'].rolling(5,center=True).min()) & (df['Low'].diff()<0)]
-                    fig.add_trace(go.Scatter(x=peaks.index, y=peaks['High'], mode="markers", name="قمم", marker=dict(color="red", symbol="triangle-down")), row=1, col=1)
-                    fig.add_trace(go.Scatter(x=troughs.index, y=troughs['Low'], mode="markers", name="قيعان", marker=dict(color="blue", symbol="triangle-up")), row=1, col=1)
-                
-                rsi_row = 2 if not show_macd else 3
-                fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], mode="lines", name="RSI", line=dict(color="cyan")), row=rsi_row, col=1)
-                fig.add_hline(y=70, line_dash="dot", line_color="red", row=rsi_row, col=1)
-                fig.add_hline(y=30, line_dash="dot", line_color="green", row=rsi_row, col=1)
-                
-                if show_macd:
-                    colors = ['green' if x>0 else 'red' for x in hist]
-                    fig.add_trace(go.Bar(x=df.index, y=hist, name="MACD Hist", marker_color=colors), row=2, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=macd_line, mode="lines", name="MACD", line=dict(color="blue")), row=2, col=1)
-                    fig.add_trace(go.Scatter(x=df.index, y=sig_line, mode="lines", name="Signal", line=dict(color="orange")), row=2, col=1)
-                
-                vol_row = rows
-                if 'Volume' in df.columns:
-                    v_colors = ['#26a69a' if c>=o else '#ef5350' for c,o in zip(df['Close'], df['Open'])]
-                    fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name="Volume", marker_color=v_colors), row=vol_row, col=1)
-                
-                fig.update_layout(height=800, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified")
-                st.plotly_chart(fig, use_container_width=True)
-            
-            with tab2:
-                st.subheader("📡 مصفوفة الإشارات عبر الأطر الزمنية")
-                tf_data = []
-                for tf in ["15m", "1h", "4h", "1d"]:
-                    try:
-                        d = yf.download(symbol, period="1mo", interval=tf, progress=False)
-                        if d.empty or len(d) < 20: continue
-                        if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
-                        d['RSI'] = 100 - (100 / (1 + (d['Close'].diff().where(lambda x: x>0, 0).rolling(14).mean() / 
-                                                      -d['Close'].diff().where(lambda x: x<0, 0).rolling(14).mean())))
-                        d['SMA_50'] = d['Close'].rolling(50).mean()
-                        sc = get_ai_score(d)
-                        sig = "شراء 🟢" if sc>=60 else "بيع 🔴" if sc<=40 else "محايد ⚪"
-                        tf_data.append({"الإطار": tf, "التقييم": f"{sc}/100", "الإشارة": sig})
-                    except: pass
-                
-                if len(tf_data) > 0:
-                    st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
-                else:
-                    st.info("لا تتوفر بيانات كافية للأطر المتعددة حالياً. جرب فترة أطول.")
-            
-            with tab3:
-                st.subheader("🛡️ حاسبة إدارة المخاطر (ATR-Based)")
-                col1, col2, col3 = st.columns(3)
-                cap = col1.number_input("رأس المال ($)", 10000.0, step=500.0)
-                risk_pct = col2.slider("نسبة المخاطرة (%)", 1.0, 5.0, 2.0)
-                entry = col3.number_input("سعر الدخول", float(last_price))
-                
-                if atr_val and not np.isnan(atr_val):
-                    sl = entry - (2 * atr_val)
-                    tp = entry + (3 * atr_val)
-                    risk_amt = cap * (risk_pct/100)
-                    shares = risk_amt / (entry - sl) if entry > sl else 0
-                    st.success(f"✅ وقف الخسارة: `{sl:.2f}` | جني الأرباح: `{tp:.2f}`")
-                    st.info(f"📦 حجم الصفقة: `{shares:.2f}` وحدة | المخاطرة: `${risk_amt:.2f}`")
-                else:
-                    st.warning("⚠️ لا يمكن حساب ATR بدقة. جرب إطاراً زمنياً أطول.")
-            
-            with tab4:
-                st.subheader("💾 تصدير البيانات والشارت")
-                csv = df.to_csv().encode('utf-8')
-                st.download_button("📥 تحميل البيانات (CSV)", csv, f"{symbol}_data.csv", "text/csv")
-                st.download_button("🖼️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{symbol}_chart.html", "text/html")
-                
-        except Exception as e:
-            st.error(f"❌ خطأ غير متوقع: {str(e)}")
-            st.info("💡 نصيحة: غيّر الإطار الزمني أو اختر أصلاً آخر لتجاوز المشكلة المؤقتة.")
+            col_a, col_b, col_c = st.columns(3)
+            col_a.metric(" حجم الصفقة", f"{position_size:.3f} وحدة")
+            col_b.metric("💸 مبلغ المخاطرة", f"${risk_amount:.2f}")
+            col_c.metric("📊 نسبة العائد للمخاطرة", f"{(tp-entry_price)/sl_dist:.2f}R")
+        else:
+            st.warning("️ مؤشر ATR غير متاح بدقة لهذا الإطار. جرب مدة أطول.")
+
+    with tab_matrix:
+        st.subheader("📡 توافق الإشارات عبر الأطر الزمنية")
+        tf_data = []
+        for tf in ["15m", "1h", "4h", "1d"]:
+            try:
+                d = yf.download(meta['symbol'], period="1mo", interval=tf, progress=False)
+                if d.empty or len(d) < 20: continue
+                if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
+                d = calc_indicators(d)
+                _, sc, _, _, _, _ = get_ai_signal(d)
+                sig = "شراء 🟢" if sc>=60 else "بيع 🔴" if sc<=40 else "محايد ⚪"
+                tf_data.append({"الإطار": tf, "التقييم": f"{sc}/100", "الاتجاه": sig})
+            except: pass
+        if tf_data: st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
+        else: st.info("لا تتوفر بيانات كافية حالياً.")
+
+    with tab_export:
+        csv = df.to_csv().encode('utf-8')
+        st.download_button("📥 تحميل البيانات (CSV)", csv, f"{meta['symbol']}_data.csv", "text/csv")
+        st.download_button("🖼️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{meta['symbol']}_chart.html", "text/html")
+
 else:
-    st.info("👈 اضبط الإعدادات من القائمة الجانبية ثم اضغط ▶️ تشغيل التحليل")
+    st.info("👈 اختر الأصل من القائمة الجانبية ثم اضغط 🔄 جلب البيانات لتحديث الشارت.")
