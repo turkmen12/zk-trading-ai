@@ -1,0 +1,68 @@
+import streamlit as st
+import yfinance as yf
+import plotly.graph_objects as go
+import numpy as np
+import pandas as pd
+
+st.set_page_config(page_title="منصة التحليل الفني", layout="wide")
+st.title("📊 منصة التحليل الذكي (Gann • SMC/ICT • Elliott Waves)")
+
+# إعدادات الإدخال
+col1, col2 = st.columns(2)
+with col1:
+    symbol = st.text_input("رمز الأصل", "BTC-USD")
+with col2:
+    interval = st.selectbox("الإطار الزمني", ["1d", "4h", "1h", "15m"])
+
+methods = st.multiselect("اختر التحليلات المراد عرضها على الشارت", 
+                         ["زوايا Gann", "مناطق SMC/ICT", "موجات Elliott"],
+                         default=["زوايا Gann"])
+
+if st.button("تشغيل التحليل 🚀"):
+    with st.spinner("جاري جلب البيانات وتحليل الأنماط..."):
+        df = yf.download(symbol, period="6mo", interval=interval, progress=False)
+        if df.empty:
+            st.error("فشل في جلب البيانات. تحقق من الرمز.")
+            st.stop()
+
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
+                                     low=df['Low'], close=df['Close'], name="السعر"))
+
+        results_info = []
+
+        # Gann
+        if "زوايا Gann" in methods:
+            high, low = df['High'].max(), df['Low'].min()
+            rng = high - low
+            n = len(df)
+            g1 = low + np.arange(n) * (rng/n)
+            g2 = high - np.arange(n) * (rng/n)
+            fig.add_trace(go.Scatter(x=df.index, y=g1, mode="lines", name="Gann 1x1 Up", line=dict(color="purple", dash="dot")))
+            fig.add_trace(go.Scatter(x=df.index, y=g2, mode="lines", name="Gann 1x1 Down", line=dict(color="red", dash="dot")))
+            results_info.append("✅ زوايا Gann مفعّلة")
+
+        # SMC/ICT
+        if "مناطق SMC/ICT" in methods:
+            fvg_bull = df[(df['Low'].shift(-1) > df['High'].shift(1)) & (df['Low'].shift(1) > df['High'].shift(2))]
+            fvg_bear = df[(df['High'].shift(-1) < df['Low'].shift(1)) & (df['High'].shift(1) < df['Low'].shift(2))]
+            fig.add_trace(go.Scatter(x=fvg_bull.index, y=fvg_bull['Low'], mode="markers", name="FVG Bull", marker=dict(color="green", size=8)))
+            fig.add_trace(go.Scatter(x=fvg_bear.index, y=fvg_bear['High'], mode="markers", name="FVG Bear", marker=dict(color="red", size=8)))
+            results_info.append(f"✅ تم رصد {len(fvg_bull)} فجوة صاعدة و {len(fvg_bear)} فجوة هابطة")
+
+        # Elliott
+        if "موجات Elliott" in methods:
+            thr = df['Close'].std() * 0.02
+            peaks = df[(df['Close'] == df['Close'].rolling(5, center=True).max()) & (df['Close'].diff().abs() > thr)]
+            troughs = df[(df['Close'] == df['Close'].rolling(5, center=True).min()) & (df['Close'].diff().abs() > thr)]
+            fig.add_trace(go.Scatter(x=peaks.index, y=peaks['Close'], mode="markers", name="قمم", marker=dict(color="blue", symbol="triangle-up", size=10)))
+            fig.add_trace(go.Scatter(x=troughs.index, y=troughs['Close'], mode="markers", name="قيعان", marker=dict(color="orange", symbol="triangle-down", size=10)))
+            results_info.append(f"✅ تم تحديد {len(peaks)} قمة و {len(troughs)} قاع")
+
+        fig.update_layout(xaxis_rangeslider_visible=False, height=600, template="plotly_white")
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.success("تم التحليل بنجاح!")
+        for msg in results_info:
+            st.info(msg)
+        st.warning("⚠️ النتائج تعليمية وليست توصيات تداول.")
