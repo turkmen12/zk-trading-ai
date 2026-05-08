@@ -7,7 +7,7 @@ import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
-# 🎨 إعدادات الواجهة المتقدمة
+# 🎨 إعدادات الواجهة
 st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="📈")
 st.markdown("""
 <style>
@@ -15,23 +15,19 @@ st.markdown("""
     .signal-box {background: #0e1117; border-left: 4px solid #00ff00; padding: 15px; border-radius: 8px; margin: 10px 0;}
     .signal-sell {border-left-color: #ff4444;}
     .tp-stage {display: inline-block; background: #1a1d24; padding: 6px 12px; margin: 4px; border-radius: 6px; font-weight: bold; font-size: 0.9rem;}
-    .metric-card {background: #1a1d24; border-radius: 10px; padding: 15px; text-align: center;}
     .info-pill {background: #262730; padding: 5px 12px; border-radius: 15px; font-size: 0.85rem; color: #ddd;}
     .elliott-status {padding: 10px; border-radius: 8px; margin: 10px 0; font-weight: bold;}
     .elliott-valid {background: rgba(0,255,0,0.1); border: 1px solid #00ff00; color: #00ff00;}
     .elliott-warn {background: rgba(255,165,0,0.1); border: 1px solid #ffa500; color: #ffa500;}
     .elliott-invalid {background: rgba(255,0,0,0.1); border: 1px solid #ff4444; color: #ff4444;}
-    .chart-toolbar {display: flex; gap: 8px; margin: 10px 0;}
-    .toolbar-btn {background: #262730; border: 1px solid #444; color: #fff; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 0.85rem;}
-    .toolbar-btn:hover {background: #3a3b3c;}
 </style>
 """, unsafe_allow_html=True)
 
 # 📦 قاعدة الأصول
 ASSETS_DB = {
-    "🥇 الذهب (Gold)": "GC=F", "🥈 الفضة (Silver)": "SI=F", "🛢️ النفط (Oil)": "CL=F",
+    "🥇 الذهب (Gold)": "GC=F", "🥈 الفضة (Silver)": "SI=F", "️ النفط (Oil)": "CL=F",
     "📈 S&P 500": "^GSPC", "💻 Nasdaq": "^IXIC", "🇬🇧 FTSE 100": "^FTSE",
-    "₿ Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
+    " Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
     "💷 GBP/USD": "GBPUSD=X", "🍎 Apple": "AAPL", "🚗 Tesla": "TSLA"
 }
 
@@ -74,7 +70,7 @@ def get_ai_signal(df):
     if macd > sig: score += 10
     else: score -= 10
     
-    direction = "شراء 🟢" if score >= 60 else "بيع 🔴" if score <= 40 else "انتظار ⚪"
+    direction = "شراء 🟢" if score >= 60 else "بيع 🔴" if score <= 40 else "انتظار "
     mult = 1 if "شراء" in direction else -1
     
     pip_size = get_pip_size(price)
@@ -179,7 +175,7 @@ if 'meta' not in st.session_state: st.session_state.meta = {}
 # 🖥️ الشريط الجانبي
 with st.sidebar:
     st.header("⚙️ الإعدادات")
-    search = st.text_input("🔍 بحث عن أصل", "")
+    search = st.text_input(" بحث عن أصل", "")
     filtered = {k:v for k,v in ASSETS_DB.items() if not search or search.lower() in k.lower() or search.lower() in v.lower()}
     selected_name = st.selectbox("الأصل", list(filtered.keys()) if filtered else list(ASSETS_DB.keys()))
     symbol = filtered.get(selected_name, ASSETS_DB[selected_name])
@@ -218,12 +214,11 @@ if st.session_state.df is not None:
     css_class = "signal-box" if is_buy else "signal-box signal-sell"
     dec = 4 if pip_size < 0.01 else 2
     
-    # 📊 صندوق التوصية الذكي
     st.markdown(f"""
     <div class="{css_class}">
         <h3 style="margin:0; font-size:1.3rem;">🤖 توصية النظام: {direction} (قوة: {score}/100)</h3>
         <div style="margin:10px 0; display:flex; gap:10px; flex-wrap:wrap;">
-            <span class="info-pill">📍 الدخول: <b>{price:.{dec}f}</b></span>
+            <span class="info-pill"> الدخول: <b>{price:.{dec}f}</b></span>
             <span class="info-pill" style="color:#ff6b6b; border:1px solid #ff6b6b;">🛑 وقف خسارة {SL_PIPS} بيب: <b>{sl:.{dec}f}</b></span>
         </div>
         <div style="margin-top:8px;">
@@ -235,60 +230,48 @@ if st.session_state.df is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    # 🎨 بناء الشارت المحسّن
     rows, heights = (3, [0.5, 0.2, 0.3]) if show_macd else (2, [0.7, 0.3])
-    titles = ("السعر", "مؤشر الزخم (MACD)", "حجم التداول") if show_macd else ("السعر", "مؤشر القوة النسبية (RSI)")
-    
+    titles = ("السعر", "MACD", "الحجم") if show_macd else ("السعر", "RSI")
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
                         row_heights=heights, subplot_titles=titles)
     
-    # 1. الشموع اليابانية - ألوان محسّنة وواضحة
+    # شموع محسّنة للأداء
     fig.add_trace(go.Candlestick(
         x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
         name="السعر",
         increasing_line_color='#00c853', decreasing_line_color='#ff1744',
         increasing_fillcolor='#00c853', decreasing_fillcolor='#ff1744',
-        line=dict(width=1), opacity=0.95
+        line=dict(width=1)
     ), row=1, col=1)
     
-    # 2. SMA 50 - خط اتجاه واضح
     fig.add_trace(go.Scatter(
         x=df.index, y=df['SMA_50'], mode='lines', name='SMA 50',
-        line=dict(color='#ffeb3b', width=2, dash='dot'), opacity=0.8
+        line=dict(color='#ffeb3b', width=1.5, dash='dot')
     ), row=1, col=1)
     
-    # 3. مناطق الدخول والخروج (مربعات على محور السعر)
-    fig.add_hline(y=price, line_dash="solid", line_color="#2196f3", line_width=2, 
-                  annotation_text=f"الدخول: {price:.{dec}f}", annotation_position="right", row=1, col=1)
-    fig.add_hline(y=sl, line_dash="dash", line_color="#ff1744", line_width=2,
-                  annotation_text=f"SL: {sl:.{dec}f}", annotation_position="right", row=1, col=1)
-    fig.add_hline(y=tp1, line_dash="dot", line_color="#4cd137", line_width=1,
-                  annotation_text=f"TP1", annotation_position="right", row=1, col=1)
-    fig.add_hline(y=tp2, line_dash="dot", line_color="#fbc531", line_width=1,
-                  annotation_text=f"TP2", annotation_position="right", row=1, col=1)
-    fig.add_hline(y=tp3, line_dash="dot", line_color="#e84118", line_width=2,
-                  annotation_text=f"TP3: {tp3:.{dec}f}", annotation_position="right", row=1, col=1)
-    
-    # 4. زوايا Gann - بنفسجي متقطع واضح
+    # خطوط السعر الأساسية
+    fig.add_hline(y=price, line_dash="solid", line_color="#2196f3", line_width=1.5, row=1, col=1)
+    fig.add_hline(y=sl, line_dash="dash", line_color="#ff1744", line_width=1.5, row=1, col=1)
+    fig.add_hline(y=tp3, line_dash="dot", line_color="#e84118", line_width=1.5, row=1, col=1)
+        
     if show_gann:
         rng = df['High'].max() - df['Low'].min()
         gann = df['Low'].min() + np.arange(len(df)) * (rng/len(df))
         fig.add_trace(go.Scatter(
             x=df.index, y=gann, mode="lines", name="Gann 1x1",
-            line=dict(color="#9c27b0", dash="dash", width=2), opacity=0.7
+            line=dict(color="#9c27b0", dash="dash", width=1.5)
         ), row=1, col=1)
         
-    # 5. مناطق SMC/ICT - مستطيلات شفافة ملونة
     if show_smc:
-        for i in range(2, len(df)):
+        # تحسين الأداء: رسم المستطيلات بشفافية أقل وتقليل العبء
+        for i in range(2, len(df), 2):  # نأخذ كل شمعة ثانية لتخفيف الحمل
             if float(df['Low'].iloc[i]) > float(df['High'].iloc[i-2]):
                 fig.add_shape(type="rect", xref="x", yref="y",
                     x0=df.index[i-2], y0=float(df['High'].iloc[i-2]),
                     x1=df.index[i], y1=float(df['Low'].iloc[i]),
-                    fillcolor="rgba(0, 200, 83, 0.12)", line=dict(width=0),
+                    fillcolor="rgba(0, 200, 83, 0.08)", line=dict(width=0),
                     layer="below", row=1, col=1)
                 
-    # 6. موجات Elliott - أرقام ذهبية بإطار أسود لوضوح تام
     if show_elliott:
         labels, status, css = detect_elliott_waves(df)
         st.markdown(f'<div class="elliott-status {css}">{status}</div>', unsafe_allow_html=True)
@@ -301,95 +284,85 @@ if st.session_state.df is not None:
             fig.add_trace(go.Scatter(
                 x=idxs, y=prices, mode="markers+text", text=texts,
                 textposition=positions,
-                textfont=dict(size=13, color="#fff", family="Arial Black"),
-                marker=dict(color="#FFD700", size=14, line=dict(width=2.5, color="#000")),
-                name="موجات إليوت", hoverinfo="text", showlegend=True
+                textfont=dict(size=12, color="#fff", family="Arial"),
+                marker=dict(color="#FFD700", size=12, line=dict(width=2, color="#000")),
+                name="Elliott", hoverinfo="text"
             ), row=1, col=1)
 
-    # 7. RSI في الأسفل - ألوان متدرجة
     rsi_row = 2 if not show_macd else 3
     fig.add_trace(go.Scatter(
         x=df.index, y=df['RSI'], mode="lines", name="RSI",
-        line=dict(color="#00bcd4", width=2), fill='tozeroy',
-        fillcolor='rgba(0, 188, 212, 0.1)'
+        line=dict(color="#00bcd4", width=1.5)
     ), row=rsi_row, col=1)
     fig.add_hline(y=70, line_dash="dot", line_color="#ff1744", row=rsi_row, col=1)
     fig.add_hline(y=30, line_dash="dot", line_color="#00c853", row=rsi_row, col=1)
-    fig.add_hrect(y0=70, y1=100, fillcolor="rgba(255,23,68,0.08)", line_width=0, row=rsi_row, col=1)
-    fig.add_hrect(y0=0, y1=30, fillcolor="rgba(0,200,83,0.08)", line_width=0, row=rsi_row, col=1)
     
-    # 8. MACD - ألوان واضحة للأعمدة والخطوط
     if show_macd:
         hist = df['MACD'] - df['MACD_Signal']
         colors = ['#00c853' if x>0 else '#ff1744' for x in hist]
         fig.add_trace(go.Bar(
-            x=df.index, y=hist, name="MACD Histogram", marker_color=colors, opacity=0.8
+            x=df.index, y=hist, name="MACD Hist", marker_color=colors
         ), row=2, col=1)
         fig.add_trace(go.Scatter(
-            x=df.index, y=df['MACD'], mode="lines", name="MACD Line",
-            line=dict(color="#2196f3", width=2)
+            x=df.index, y=df['MACD'], mode="lines", name="MACD",
+            line=dict(color="#2196f3", width=1.5)
         ), row=2, col=1)
         fig.add_trace(go.Scatter(
-            x=df.index, y=df['MACD_Signal'], mode="lines", name="Signal Line",
-            line=dict(color="#ff9800", width=2, dash="dot")
+            x=df.index, y=df['MACD_Signal'], mode="lines", name="Signal",
+            line=dict(color="#ff9800", width=1.5, dash="dot")
         ), row=2, col=1)
-        fig.add_hline(y=0, line_color="#666", line_dash="dot", row=2, col=1)
         
-    # 9. حجم التداول - ألوان متوافقة مع اتجاه الشمعة
     vol_row = rows
     if 'Volume' in df.columns:
         v_colors = ['#00c853' if c>=o else '#ff1744' for c,o in zip(df['Close'], df['Open'])]
         fig.add_trace(go.Bar(
-            x=df.index, y=df['Volume'], name="Volume", marker_color=v_colors, opacity=0.7
+            x=df.index, y=df['Volume'], name="Volume", marker_color=v_colors
         ), row=vol_row, col=1)
-    
-    # 🎨 تنسيق الشارت النهائي الاحترافي
+        
+    # إعدادات تحسين الأداء والتفاعل
+    config = {
+        'displayModeBar': True,
+        'scrollZoom': True,
+        'displaylogo': False,
+        'modeBarButtonsToRemove': ['zoomIn', 'zoomOut', 'autoScale', 'resetScale', 'hoverClosest', 'hoverCompare'],
+        'doubleClick': 'reset',
+        'showTips': False
+    }
+
     fig.update_layout(
-        height=850,
+        height=800,
         template="plotly_dark",
-        plot_bgcolor='#0e1117',
-        paper_bgcolor='#0e1117',
-        font=dict(family="Segoe UI", size=12, color="#eee"),
+        plot_bgcolor='#0a0a0a',
+        paper_bgcolor='#0a0a0a',
+        font=dict(family="Segoe UI, sans-serif", size=12, color="#ccc"),
         xaxis_rangeslider_visible=False,
-        hovermode="x unified",
-        hoverlabel=dict(bgcolor="#1a1d24", font_size=12, font_family="Segoe UI"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor="rgba(0,0,0,0.3)"),
-        margin=dict(l=20, r=80, t=40, b=20),
-        xaxis=dict(showgrid=True, gridcolor='#333', zeroline=False),
-        yaxis=dict(showgrid=True, gridcolor='#333', zeroline=True, zerolinecolor='#555')
+        hovermode="x",  # أسرع بكثير من unified
+        hoverlabel=dict(bgcolor="#111", font_size=11, font_family="monospace"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor="rgba(0,0,0,0.2)"),
+        margin=dict(l=10, r=10, t=30, b=10),
+        xaxis=dict(showgrid=True, gridcolor='#222', zeroline=False),
+        yaxis=dict(showgrid=True, gridcolor='#222', zeroline=False)
     )
     
-    # تحسين محاور الفرعية
     for i in range(1, rows+1):
-        fig.update_yaxes(showgrid=True, gridcolor='#2a2a2a', zeroline=False, row=i, col=1)
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # 🧰 شريط أدوات مصغر (اختياري)
-    st.markdown("""
-    <div class="chart-toolbar">
-        <span class="toolbar-btn" onclick="alert('استخدم عجلة الماوس للتكبير/التصغير')">🔍 تكبير/تصغير</span>
-        <span class="toolbar-btn" onclick="alert('اسحب الشارت للتحريك')">✋ تحريك</span>
-        <span class="toolbar-btn" onclick="alert('اضغط مزدوجاً لإعادة الضبط')">🔄 إعادة ضبط</span>
-    </div>
-    """, unsafe_allow_html=True)
+        fig.update_yaxes(showgrid=True, gridcolor='#1a1a1a', zeroline=False, row=i, col=1)
+        
+    st.plotly_chart(fig, use_container_width=True, config=config)
 
-    # 📑 التبويبات
     tab_risk, tab_matrix, tab_export = st.tabs(["🛡️ إدارة المخاطر", "📡 مصفوفة الأطر", "💾 تصدير"])
     
     with tab_risk:
-        st.subheader("🛡️ حاسبة إدارة رأس المال (معيارية)")
+        st.subheader("🛡️ حاسبة إدارة رأس المال")
         c1, c2, c3 = st.columns(3)
-        lot_size = c1.number_input("📦 حجم اللوت", min_value=0.01, value=0.01, step=0.01)
-        risk_per_pip_std = 10.0
-        total_risk_usd = lot_size * SL_PIPS * risk_per_pip_std
-        potential_profit_usd = lot_size * 500 * risk_per_pip_std
+        lot_size = c1.number_input(" حجم اللوت", min_value=0.01, value=0.01, step=0.01)
+        total_risk_usd = lot_size * SL_PIPS * 10.0
+        potential_profit_usd = lot_size * 500 * 10.0
         
         col_a, col_b, col_c = st.columns(3)
-        col_a.metric("💸 مخاطرة الصفقة (SL)", f"${total_risk_usd:.2f}")
-        col_b.metric("💰 ربح الصفقة الكامل (TP3)", f"${potential_profit_usd:.2f}")
-        col_c.metric("📊 نسبة العائد للمخاطرة", f"{500/SL_PIPS:.1f}R")
-        st.caption(f"📏 المعادلة: اللوت ({lot_size}) × البييبات ({SL_PIPS}) × القيمة ($10) = ${total_risk_usd:.2f}")
+        col_a.metric("💸 مخاطرة (SL)", f"${total_risk_usd:.2f}")
+        col_b.metric("💰 ربح (TP3)", f"${potential_profit_usd:.2f}")
+        col_c.metric("📊 R:R", f"{500/SL_PIPS:.1f}")
+        st.caption(f"📏 اللوت × البييبات × $10 = ${total_risk_usd:.2f}")
 
     with tab_matrix:
         st.subheader("📡 توافق الإشارات عبر الأطر")
@@ -415,4 +388,4 @@ if st.session_state.df is not None:
         st.download_button("🖼️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{meta['symbol']}_chart.html", "text/html")
 
 else:
-    st.info("👈 اختر الأصل واضغط 🔄 جلب البيانات لبدء التحليل.")
+    st.info("👈 اختر الأصل واضغط  جلب البيانات لبدء التحليل.")
