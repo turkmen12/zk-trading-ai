@@ -7,7 +7,7 @@ import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
-# 🎨 إعدادات الواجهة
+#  إعدادات الواجهة
 st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="📈")
 st.markdown("""
 <style>
@@ -24,10 +24,10 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 📦 قاعدة الأصول
+#  قاعدة الأصول
 ASSETS_DB = {
     "🥇 الذهب (Gold)": "GC=F", "🥈 الفضة (Silver)": "SI=F", "🛢️ النفط (Oil)": "CL=F",
-    "📈 S&P 500": "^GSPC", " Nasdaq": "^IXIC", "🇬🇧 FTSE 100": "^FTSE",
+    "📈 S&P 500": "^GSPC", "💻 Nasdaq": "^IXIC", "🇬 FTSE 100": "^FTSE",
     "₿ Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
     "💷 GBP/USD": "GBPUSD=X", "🍎 Apple": "AAPL", "🚗 Tesla": "TSLA"
 }
@@ -87,7 +87,6 @@ def get_ai_signal(df):
 
 # 🌊 محرك موجات إليوت الذكي
 def detect_elliott_waves(df, sensitivity=0.015):
-    # إيجاد القمم والقيعان المهمة
     highs = df['High'].rolling(window=5, center=True).max()
     lows = df['Low'].rolling(window=5, center=True).min()
     
@@ -99,7 +98,6 @@ def detect_elliott_waves(df, sensitivity=0.015):
     for idx, row in troughs.iterrows(): swings.append(('trough', idx, float(row['Low'])))
     swings.sort(key=lambda x: x[1])
     
-    # تصفية التقلبات الصغيرة
     filtered = []
     last = None
     for t, idx, p in swings:
@@ -108,15 +106,14 @@ def detect_elliott_waves(df, sensitivity=0.015):
             last = p
             
     if len(filtered) < 6:
-        return [], "بيانات غير كافية للعد"
+        return [], "بيانات غير كافية للعد", "elliott-warn"
 
-    # البحث عن نمط 1-2-3-4-5 صاعد (الأكثر شيوعاً)
     labels = []
     status = "️ قيد التشكل أو غير مكتمل"
     css = "elliott-warn"
     
     for i in range(len(filtered) - 5):
-        if filtered[i][0] != 'trough': continue # البداية يجب أن تكون قاعاً
+        if filtered[i][0] != 'trough': continue
         
         w1_start = filtered[i]
         w1_end = next((s for s in filtered[i:] if s[0]=='peak'), None)
@@ -134,7 +131,6 @@ def detect_elliott_waves(df, sensitivity=0.015):
         w5_end = next((s for s in filtered if s[1]>w4_end[1] and s[0]=='peak' and s[2] > w3_end[2]), None)
         if not w5_end: continue
         
-        # التحقق من القواعد الصارمة
         len1 = w1_end[2] - w1_start[2]
         len2 = w1_end[2] - w2_end[2]
         len3 = w3_end[2] - w2_end[2]
@@ -148,35 +144,25 @@ def detect_elliott_waves(df, sensitivity=0.015):
         
         if valid:
             labels = [
-                ('trough', w1_start[1], w1_start[2], '1'),
-                ('peak', w1_end[1], w1_end[2], '2'),
-                ('trough', w2_end[1], w2_end[2], '3'), # تصحيح: الموجة 3 نهاية عند قمة
-                ('peak', w3_end[1], w3_end[2], '4'),   # تصحيح: الموجة 4 نهاية عند قاع
-                ('trough', w4_end[1], w4_end[2], '5'), # تصحيح: الموجة 5 نهاية عند قمة
-            ]
-            # إعادة ترتيب التسميات بشكل صحيح للعرض
-            labels = [
-                (w1_start[1], w1_start[2], '1 Start'),
-                (w1_end[1], w1_end[2], '1'),
-                (w2_end[1], w2_end[2], '2'),
-                (w3_end[1], w3_end[2], '3'),
-                (w4_end[1], w4_end[2], '4'),
-                (w5_end[1], w5_end[2], '5')
+                (w1_start[1], w1_start[2], '1'),
+                (w1_end[1], w1_end[2], '2'),
+                (w2_end[1], w2_end[2], '3'),
+                (w3_end[1], w3_end[2], '4'),
+                (w4_end[1], w4_end[2], '5')
             ]
             
-            # البحث عن ABC تصحيحية
             a_end = next((s for s in filtered if s[1]>w5_end[1] and s[0]=='trough'), None)
             b_end = next((s for s in filtered if s[1]>a_end[1] and s[0]=='peak' and s[2] < w5_end[2]), None)
             c_end = next((s for s in filtered if s[1]>b_end[1] and s[0]=='trough' and s[2] < a_end[2]), None)
             
             if a_end and b_end and c_end:
                 labels.extend([(a_end[1], a_end[2], 'A'), (b_end[1], b_end[2], 'B'), (c_end[1], c_end[2], 'C')])
-                status = f"✅ نمط 1-2-3-4-5 + ABC مكتمل وصحيح"
+                status = "✅ نمط 1-2-3-4-5 + ABC مكتمل وصحيح"
                 css = "elliott-valid"
             else:
-                status = f"✅ الموجات الدافعة 1-5 صحيحة | التصحيح ABC قيد التشكل"
+                status = "✅ الموجات الدافعة 1-5 صحيحة | التصحيح ABC قيد التشكل"
                 css = "elliott-warn"
-            break # أخذ أول نمط صحيح
+            break
         else:
             status = f"❌ نمط محتمل لكنه مخالف للقاعدة: {reason}"
             css = "elliott-invalid"
@@ -190,7 +176,7 @@ if 'meta' not in st.session_state: st.session_state.meta = {}
 # 🖥️ الشريط الجانبي
 with st.sidebar:
     st.header("⚙️ الإعدادات")
-    search = st.text_input(" بحث عن أصل", "")
+    search = st.text_input("🔍 بحث عن أصل", "")
     filtered = {k:v for k,v in ASSETS_DB.items() if not search or search.lower() in k.lower() or search.lower() in v.lower()}
     selected_name = st.selectbox("الأصل", list(filtered.keys()) if filtered else list(ASSETS_DB.keys()))
     symbol = filtered.get(selected_name, ASSETS_DB[selected_name])
@@ -201,7 +187,7 @@ with st.sidebar:
     period = st.selectbox("المدة", ["1mo", "3mo", "6mo", "1y"], index=2)
     interval = st.selectbox("الإطار", ["1d", "4h", "1h", "15m"], index=0)
     
-    if st.button(" جلب البيانات وتحديث", type="primary"):
+    if st.button("🔄 جلب البيانات وتحديث", type="primary"):
         with st.spinner("⏳ جاري الاتصال بالبورصة..."):
             try:
                 df_raw = yf.download(symbol, period=period, interval=interval, progress=False)
@@ -214,7 +200,7 @@ with st.sidebar:
     
     st.divider()
     st.subheader("🎛️ المؤشرات (تفاعل فوري)")
-    show_gann = st.checkbox(" زوايا Gann", True)
+    show_gann = st.checkbox("📐 زوايا Gann", True)
     show_smc = st.checkbox("🏦 مناطق SMC/ICT", True)
     show_elliott = st.checkbox("🌊 موجات Elliott (1-5 + ABC)", False)
     show_macd = st.checkbox("📉 مؤشر MACD", False)
@@ -231,10 +217,10 @@ if st.session_state.df is not None:
     
     st.markdown(f"""
     <div class="{css_class}">
-        <h3 style="margin:0; font-size:1.3rem;"> توصية النظام: {direction} (قوة: {score}/100)</h3>
+        <h3 style="margin:0; font-size:1.3rem;">🤖 توصية النظام: {direction} (قوة: {score}/100)</h3>
         <div style="margin:10px 0; display:flex; gap:10px; flex-wrap:wrap;">
-            <span class="info-pill"> الدخول: <b>{price:.{dec}f}</b></span>
-            <span class="info-pill" style="color:#ff6b6b; border:1px solid #ff6b6b;">🛑 وقف خسارة {SL_PIPS} بيب: <b>{sl:.{dec}f}</b></span>
+            <span class="info-pill">📍 الدخول: <b>{price:.{dec}f}</b></span>
+            <span class="info-pill" style="color:#ff6b6b; border:1px solid #ff6b6b;"> وقف خسارة {SL_PIPS} بيب: <b>{sl:.{dec}f}</b></span>
         </div>
         <div style="margin-top:8px;">
             <span style="color:#aaa; font-size:0.85rem;">🎯 أهداف جني الأرباح (إجمالي 500 بيب):</span><br>
@@ -245,7 +231,6 @@ if st.session_state.df is not None:
     </div>
     """, unsafe_allow_html=True)
 
-    # بناء الشارت
     rows, heights = (3, [0.5, 0.2, 0.3]) if show_macd else (2, [0.7, 0.3])
     titles = ("السعر", "MACD", "الحجم") if show_macd else ("السعر", "RSI")
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
@@ -272,7 +257,6 @@ if st.session_state.df is not None:
             idxs = [l[0] for l in labels]
             prices = [l[1] for l in labels]
             texts = [l[2] for l in labels]
-            # وضع الأرقام فوق القمم وتحت القيعان لمنع التداخل
             positions = ['top' if df.loc[i, 'High'] == p else 'bottom' for i, p in zip(idxs, prices)]
             fig.add_trace(go.Scatter(x=idxs, y=prices, mode="markers+text", text=texts, 
                                      textposition=positions, textfont=dict(size=14, color="white", family="Arial Black"),
@@ -299,7 +283,7 @@ if st.session_state.df is not None:
     fig.update_layout(height=750, template="plotly_dark", xaxis_rangeslider_visible=False, hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
 
-    tab_risk, tab_matrix, tab_export = st.tabs(["️ إدارة المخاطر", "📡 مصفوفة الأطر", "💾 تصدير"])
+    tab_risk, tab_matrix, tab_export = st.tabs(["🛡️ إدارة المخاطر", " مصفوفة الأطر", "💾 تصدير"])
     
     with tab_risk:
         st.subheader("🛡️ حاسبة إدارة رأس المال (معيارية)")
@@ -313,10 +297,10 @@ if st.session_state.df is not None:
         col_a.metric("💸 مخاطرة الصفقة (SL)", f"${total_risk_usd:.2f}")
         col_b.metric("💰 ربح الصفقة الكامل (TP3)", f"${potential_profit_usd:.2f}")
         col_c.metric(" نسبة العائد للمخاطرة", f"{500/SL_PIPS:.1f}R")
-        st.caption(f" المعادلة: اللوت ({lot_size}) × البييبات ({SL_PIPS}) × القيمة ($10) = ${total_risk_usd:.2f}")
+        st.caption(f"📏 المعادلة: اللوت ({lot_size}) × البييبات ({SL_PIPS}) × القيمة ($10) = ${total_risk_usd:.2f}")
 
-        with tab_matrix:
-        st.subheader("📡 توافق الإشارات عبر الأطر")
+    with tab_matrix:
+        st.subheader(" توافق الإشارات عبر الأطر")
         tf_data = []
         for tf in ["15m", "1h", "4h", "1d"]:
             try:
@@ -332,3 +316,11 @@ if st.session_state.df is not None:
             st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
         else:
             st.info("لا تتوفر بيانات كافية حالياً.")
+
+    with tab_export:
+        csv = df.to_csv().encode('utf-8')
+        st.download_button("📥 تحميل البيانات (CSV)", csv, f"{meta['symbol']}_data.csv", "text/csv")
+        st.download_button("️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{meta['symbol']}_chart.html", "text/html")
+
+else:
+    st.info("👈 اختر الأصل واضغط 🔄 جلب البيانات لبدء التحليل.")
