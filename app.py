@@ -14,36 +14,70 @@ ASSETS_DB = {
     "Ethereum": "ETH-USD", "EUR/USD": "EURUSD=X", "Tesla": "TSLA"
 }
 
-def analyze_data(df):
-    df = df.copy()
-    df['SMA_50'] = df['Close'].rolling(50).mean()
+def prepare_chart_data(df, timeframe):
+    """تحويل بيانات pandas إلى صيغة تفهمها مكتبة TradingView بدقة"""
+    chart_data = []
+    fmt = '%Y-%m-%d' if 'd' in timeframe else '%Y-%m-%d %H:%M'
     
-    high, low = df['High'].max(), df['Low'].min()
-    rng = high - low
-    n = len(df)
-    df['Gann_Up'] = low + np.arange(n) * (rng/n)
-    df['Gann_Down'] = high - np.arange(n) * (rng/n)
+    for idx, row in df.iterrows():
+        chart_data.append({
+            'time': idx.strftime(fmt),
+            'open': float(row['Open']),
+            'high': float(row['High']),
+            'low': float(row['Low']),
+            'close': float(row['Close'])
+        })
+    return chart_data
+
+def analyze_indicators(df, timeframe, show_gann, show_smc, show_elliott):
+    fmt = '%Y-%m-%d' if 'd' in timeframe else '%Y-%m-%d %H:%M'
+    results = {'gann': [], 'fvg': [], 'elliott': []}
     
-    # SMC FVGs
-    fvg_list = []
-    for i in range(2, len(df)):
-        if df['Low'].iloc[i] > df['High'].iloc[i-2]:
-            fvg_list.append({
-                'time': df.index[i].strftime('%Y-%m-%d') if 'd' in st.session_state.get('tf', '1d') else df.index[i].strftime('%Y-%m-%d %H:%M'),
-                'top': float(df['High'].iloc[i-2]),
-                'bottom': float(df['Low'].iloc[i])
+    # 1. Gann Angles
+    if show_gann:
+        high, low = df['High'].max(), df['Low'].min()
+        rng = high - low
+        n = len(df)
+        for idx in df.index:
+            i = df.index.get_loc(idx)
+            results['gann'].append({
+                'time': idx.strftime(fmt),
+                'value': float(low + i * (rng/n))
             })
             
-    peaks = df[df['High'] == df['High'].rolling(5, center=True).max()]
-    troughs = df[df['Low'] == df['Low'].rolling(5, center=True).min()]
-    return df, fvg_list, peaks, troughs
+    # 2. SMC Fair Value Gaps
+    if show_smc:
+        for i in range(2, len(df)):
+            if df['Low'].iloc[i] > df['High'].iloc[i-2]:
+                results['fvg'].append({
+                    'time': df.index[i].strftime(fmt),
+                    'top': float(df['High'].iloc[i-2]),
+                    'bottom': float(df['Low'].iloc[i])
+                })
+                
+    # 3. Elliott Peaks/Troughs
+    if show_elliott:
+        peaks = df[df['High'] == df['High'].rolling(5, center=True).max()]
+        troughs = df[df['Low'] == df['Low'].rolling(5, center=True).min()]
+        
+        for idx in peaks.index:
+            results['elliott'].append({
+                'time': idx.strftime(fmt), 'position': 'aboveBar',
+                'color': '#ef5350', 'shape': 'arrowDown', 'text': 'P'
+            })
+        for idx in troughs.index:
+            results['elliott'].append({
+                'time': idx.strftime(fmt), 'position': 'belowBar',
+                'color': '#26a69a', 'shape': 'arrowUp', 'text': 'T'
+            })
+            
+    return results
 
 with st.sidebar:
     st.header("⚙️ لوحة التحكم")
     asset = st.selectbox("الرمز", ASSETS_DB.keys())
     symbol = ASSETS_DB[asset]
     timeframe = st.selectbox("الإطار الزمني", ["1d", "4h", "1h", "15m"])
-    st.session_state['tf'] = timeframe
     
     st.subheader("التحليلات")
     show_gann = st.checkbox("زوايا Gann", True)
@@ -51,68 +85,50 @@ with st.sidebar:
     show_elliott = st.checkbox("موجات Elliott", False)
     
     if st.button("🔄 تحديث الشارت", type="primary"):
-        st.session_state['refresh'] = True
+        st.session_state['run'] = True
 
-if 'refresh' in st.session_state:
-    with st.spinner("جاري معالجة البيانات..."):
+if st.session_state.get('run'):
+    with st.spinner("جاري جلب البيانات ومعالجتها..."):
         try:
-            df = yf.download(symbol, period="6mo", interval=timeframe, progress=False)
+            # ✅ الطريقة الأضمن لجلب البيانات من Yahoo Finance
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period="6mo", interval=timeframe)
+            
             if df.empty:
-                st.error("لا توجد بيانات متاحة لهذا الرمز/الإطار.")
+                st.error("️ لا توجد بيانات. جرب رمزاً آخر أو إطاراً زمنياً أطول (مثل 1d).")
                 st.stop()
                 
-            # 🔧 إصلاح مشكلة MultiIndex الشائعة في yfinance
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = df.columns.get_level_values(0)
+            # التأكد من وجود الأعمدة الأساسية
+            required = ['Open', 'High', 'Low', 'Close']
+            if not all(c in df.columns for c in required):
+                st.error("❌ تنسيق البيانات غير مدعوم لهذا الرمز.")
+                st.stop()
+                
+            # إزالة الصفوف الفارغة بحذر (فقط إذا كانت الأسعار ناقصة)
+            df = df.dropna(subset=required)
+            if len(df) < 10:
+                st.error("⚠️ بيانات غير كافية للرسم. جرب فترة أطول.")
+                st.stop()
+                
+            # تجهيز الحزم للواجهة
+            candles = prepare_chart_data(df, timeframe)
+            indicators = analyze_indicators(df, timeframe, show_gann, show_smc, show_elliott)
             
-            # حذف الصفوف الفارغة لتجنب خطأ float()
-            df = df.dropna()
-            
-            # تجهيز بيانات الشموع
-            chart_data = []
-            for idx, row in df.iterrows():
-                t_str = idx.strftime('%Y-%m-%d') if 'd' in timeframe else idx.strftime('%Y-%m-%d %H:%M:%S')
-                chart_data.append({
-                    'time': t_str,
-                    'open': float(row['Open']),
-                    'high': float(row['High']),
-                    'low': float(row['Low']),
-                    'close': float(row['Close'])
-                })
-
-            df_analyzed, fvg_list, peaks, troughs = analyze_data(df)
-            
-            # تجهيز Gann (TV Line Series تتوقع {time, value})
-            gann_data = []
-            if show_gann:
-                for idx, row in df_analyzed.iterrows():
-                    t_str = idx.strftime('%Y-%m-%d') if 'd' in timeframe else idx.strftime('%Y-%m-%d %H:%M:%S')
-                    gann_data.append({'time': t_str, 'value': float(row['Gann_Up'])})
-
-            # تجهيز Elliott Markers
-            elliott_markers = []
-            if show_elliott:
-                for idx in peaks.index:
-                    t_str = idx.strftime('%Y-%m-%d') if 'd' in timeframe else idx.strftime('%Y-%m-%d %H:%M:%S')
-                    elliott_markers.append({'time': t_str, 'position': 'aboveBar', 'color': '#ef5350', 'shape': 'arrowDown', 'text': 'P'})
-                for idx in troughs.index:
-                    t_str = idx.strftime('%Y-%m-%d') if 'd' in timeframe else idx.strftime('%Y-%m-%d %H:%M:%S')
-                    elliott_markers.append({'time': t_str, 'position': 'belowBar', 'color': '#26a69a', 'shape': 'arrowUp', 'text': 'T'})
-
             payload = {
-                'candles': chart_data,
-                'gann': gann_data,
-                'fvg': fvg_list,
-                'elliott': elliott_markers,
+                'candles': candles,
+                'indicators': indicators,
                 'options': {'gann': show_gann, 'smc': show_smc, 'elliott': show_elliott}
             }
-            st.session_state['chart_payload'] = json.dumps(payload)
-            del st.session_state['refresh']
+            st.session_state['chart_data'] = json.dumps(payload)
+            st.session_state['last_symbol'] = symbol
+            del st.session_state['run']
+            
         except Exception as e:
-            st.error(f"فشل في جلب البيانات: {e}")
+            st.error(f"❌ فشل الاتصال: {str(e)}")
+            st.info("💡 نصيحة: جرب BTC-USD أو ^GSPC للتأكد من عمل المنصة.")
 
-if 'chart_payload' in st.session_state:
-    payload = st.session_state['chart_payload']
+if 'chart_data' in st.session_state:
+    data_json = st.session_state['chart_data']
     
     tv_html = f"""
     <!DOCTYPE html>
@@ -122,15 +138,18 @@ if 'chart_payload' in st.session_state:
         <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body {{ margin: 0; padding: 0; background: #131722; overflow: hidden; }}
-            #chart-container {{ width: 100%; height: 80vh; }}
-            .info-bar {{ position: absolute; top: 10px; left: 10px; z-index: 10; background: rgba(30,34,45,0.9); padding: 8px 12px; border-radius: 6px; color: #d1d4dc; font-family: sans-serif; font-size: 13px; pointer-events: none; }}
+            #chart-container {{ width: 100%; height: 82vh; }}
+            .hud {{ position: absolute; top: 12px; left: 12px; z-index: 10; 
+                   background: rgba(19, 23, 34, 0.95); padding: 8px 14px; border-radius: 6px; 
+                   border: 1px solid #2a2e39; color: #d1d4dc; font-family: -apple-system, sans-serif; font-size: 13px; }}
+            .price {{ font-weight: bold; color: #2962ff; font-size: 15px; margin-left: 8px; }}
         </style>
     </head>
     <body>
-        <div class="info-bar" id="info-bar">السعر: --- | الإطار: {timeframe}</div>
+        <div class="hud">📊 <span id="sym">{st.session_state.get('last_symbol', '')}</span> | السعر: <span id="price" class="price">---</span></div>
         <div id="chart-container"></div>
         <script>
-            const data = {payload};
+            const data = {data_json};
             const container = document.getElementById('chart-container');
             
             const chart = LightweightCharts.createChart(container, {{
@@ -140,6 +159,7 @@ if 'chart_payload' in st.session_state:
                 grid: {{ vertLines: {{ color: '#1f2943' }}, horzLines: {{ color: '#1f2943' }} }},
                 crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
                 timeScale: {{ timeVisible: true, secondsVisible: false, borderColor: '#2B2B43' }},
+                handleScroll: {{ vertTouchDrag: false }},
             }});
 
             const candleSeries = chart.addCandlestickSeries({{
@@ -148,22 +168,19 @@ if 'chart_payload' in st.session_state:
             }});
             candleSeries.setData(data.candles);
 
-            if (data.options.gann && data.gann.length > 0) {{
+            if (data.options.gann && data.indicators.gann.length > 0) {{
                 const gannSeries = chart.addLineSeries({{ color: '#a044ff', lineWidth: 1, lineStyle: 2 }});
-                gannSeries.setData(data.gann);
+                gannSeries.setData(data.indicators.gann);
             }}
 
-            if (data.options.elliott && data.elliott.length > 0) {{
-                candleSeries.setMarkers(data.elliott);
+            if (data.options.elliott && data.indicators.elliott.length > 0) {{
+                candleSeries.setMarkers(data.indicators.elliott);
             }}
 
-            // تحديث شريط المعلومات عند تحريك الماوس
             chart.subscribeCrosshairMove(param => {{
-                if (param.time) {{
-                    const price = param.seriesData.get(candleSeries);
-                    if (price) {{
-                        document.getElementById('info-bar').textContent = `السعر: ${{price.close.toFixed(2)}} | O: ${{price.open.toFixed(2)}} H: ${{price.high.toFixed(2)}} L: ${{price.low.toFixed(2)}}`;
-                    }}
+                if (param.time && param.seriesData.has(candleSeries)) {{
+                    const d = param.seriesData.get(candleSeries);
+                    document.getElementById('price').textContent = d.close.toFixed(2);
                 }}
             }});
 
@@ -175,6 +192,6 @@ if 'chart_payload' in st.session_state:
     </html>
     """
     st.components.v1.html(tv_html, height=850, scrolling=False)
-    st.success("✅ تم تحميل الشارت بنجاح. استخدم عجلة الماوس للتكبير والسحب للتحريك.")
+    st.success("✅ تم تحميل شارت TradingView بنجاح. استخدم العجلة للتكبير والسحب للتحريك.")
 else:
     st.info("👈 اختر الأصل والإطار الزمني، ثم اضغط '🔄 تحديث الشارت' للبدء.")
