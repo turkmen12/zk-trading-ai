@@ -1,415 +1,207 @@
 import streamlit as st
 import yfinance as yf
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
-import time
+import json
 import warnings
 warnings.filterwarnings('ignore')
 
-# 🎨 إعدادات الواجهة
-st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="")
-st.markdown("""
-<style>
-    .stTabs [data-baseweb="tab-list"] button {font-size: 14px; font-weight: 600; padding: 8px 16px;}
-    .signal-box {background: #0e1117; border-left: 4px solid #00ff00; padding: 15px; border-radius: 8px; margin: 10px 0;}
-    .signal-sell {border-left-color: #ff4444;}
-    .tp-stage {display: inline-block; background: #1a1d24; padding: 6px 12px; margin: 4px; border-radius: 6px; font-weight: bold; font-size: 0.9rem;}
-    .info-pill {background: #262730; padding: 5px 12px; border-radius: 15px; font-size: 0.85rem; color: #ddd;}
-    .elliott-status {padding: 10px; border-radius: 8px; margin: 10px 0; font-weight: bold;}
-    .elliott-valid {background: rgba(0,255,0,0.1); border: 1px solid #00ff00; color: #00ff00;}
-    .elliott-warn {background: rgba(255,165,0,0.1); border: 1px solid #ffa500; color: #ffa500;}
-    .elliott-invalid {background: rgba(255,0,0,0.1); border: 1px solid #ff4444; color: #ff4444;}
-    .live-ticker {background: #0a0a0a; border: 1px solid #333; border-radius: 8px; padding: 10px 15px; display: inline-flex; align-items: center; gap: 10px; margin: 10px 0;}
-    .live-dot {width: 10px; height: 10px; background: #00ff00; border-radius: 50%; animation: pulse 1.5s infinite;}
-    @keyframes pulse {0% {opacity: 1;} 50% {opacity: 0.4;} 100% {opacity: 1;}}
-</style>
-""", unsafe_allow_html=True)
+st.set_page_config(page_title="ProTrader TV Replica", layout="wide", page_icon="📈")
 
-# 📦 قاعدة الأصول
+# قاعدة الأصول
 ASSETS_DB = {
-    "🥇 الذهب (Gold)": "GC=F", "🥈 الفضة (Silver)": "SI=F", "🛢️ النفط (Oil)": "CL=F",
-    "📈 S&P 500": "^GSPC", " Nasdaq": "^IXIC", "🇬🇧 FTSE 100": "^FTSE",
-    "₿ Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
-    "💷 GBP/USD": "GBPUSD=X", "🍎 Apple": "AAPL", "🚗 Tesla": "TSLA"
+    "الذهب (Gold)": "GC=F", "الفضة (Silver)": "SI=F", "النفط (Oil)": "CL=F",
+    "S&P 500": "^GSPC", "Nasdaq": "^IXIC", "Bitcoin": "BTC-USD",
+    "Ethereum": "ETH-USD", "EUR/USD": "EURUSD=X", "Tesla": "TSLA"
 }
 
-# 🔧 دوال مساعدة
-def get_scalar(series):
-    if hasattr(series, 'iloc'):
-        val = series.iloc[-1]
-        return float(val.item()) if hasattr(val, 'item') else float(val)
-    return float(series)
-
-def calc_indicators(df):
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    df['RSI'] = 100 - (100 / (1 + gain/loss))
+#  دوال التحليل (بايثون)
+def analyze_data(df):
+    # حساب المؤشرات
     df['SMA_50'] = df['Close'].rolling(50).mean()
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    df['MACD'] = ema12 - ema26
-    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
-    return df
+    
+    # Gann (زوايا مبسطة)
+    high, low = df['High'].max(), df['Low'].min()
+    rng = high - low
+    df['Gann_Up'] = low + np.arange(len(df)) * (rng/len(df))
+    df['Gann_Down'] = high - np.arange(len(df)) * (rng/len(df))
+    
+    # SMC (Fair Value Gaps)
+    fvg = []
+    for i in range(2, len(df)):
+        if df['Low'].iloc[i] > df['High'].iloc[i-2]: # Bullish FVG
+            fvg.append({'start_idx': i-2, 'end_idx': i, 'top': df['High'].iloc[i-2], 'bottom': df['Low'].iloc[i], 'type': 'bull'})
+    
+    # Elliott (Peaks/Troughs)
+    peaks = df[df['High'] == df['High'].rolling(5, center=True).max()]
+    troughs = df[df['Low'] == df['Low'].rolling(5, center=True).min()]
+    
+    return df, fvg, peaks, troughs
 
-def get_pip_size(price):
-    if price > 5000: return 1.0
-    elif price > 50: return 0.1
-    else: return 0.0001
-
-def get_ai_signal(df):
-    price = get_scalar(df['Close'])
-    rsi = get_scalar(df['RSI']) if not pd.isna(df['RSI'].iloc[-1]) else 50
-    sma50 = get_scalar(df['SMA_50']) if not pd.isna(df['SMA_50'].iloc[-1]) else 0
-    macd = get_scalar(df['MACD'])
-    sig = get_scalar(df['MACD_Signal'])
-    
-    score = 50
-    if rsi < 30: score += 15
-    elif rsi > 70: score -= 15
-    if sma50 > 0 and price > sma50: score += 10
-    elif sma50 > 0 and price < sma50: score -= 10
-    if macd > sig: score += 10
-    else: score -= 10
-    
-    direction = "شراء 🟢" if score >= 60 else "بيع 🔴" if score <= 40 else "انتظار ⚪"
-    mult = 1 if "شراء" in direction else -1
-    
-    pip_size = get_pip_size(price)
-    SL_PIPS = 200
-    TP1_PIPS, TP2_PIPS, TP3_PIPS = 150, 300, 500
-    
-    sl = price - (SL_PIPS * pip_size * mult)
-    tp1 = price + (TP1_PIPS * pip_size * mult)
-    tp2 = price + (TP2_PIPS * pip_size * mult)
-    tp3 = price + (TP3_PIPS * pip_size * mult)
-    
-    return direction, score, price, sl, tp1, tp2, tp3, pip_size, SL_PIPS
-
-# 🌊 محرك موجات إليوت الذكي
-def detect_elliott_waves(df, sensitivity=0.015):
-    highs = df['High'].rolling(window=5, center=True).max()
-    lows = df['Low'].rolling(window=5, center=True).min()
-    
-    peaks = df[df['High'] == highs][['High']].drop_duplicates()
-    troughs = df[df['Low'] == lows][['Low']].drop_duplicates()
-    
-    swings = []
-    for idx, row in peaks.iterrows(): swings.append(('peak', idx, float(row['High'])))
-    for idx, row in troughs.iterrows(): swings.append(('trough', idx, float(row['Low'])))
-    swings.sort(key=lambda x: x[1])
-    
-    filtered = []
-    last = None
-    for t, idx, p in swings:
-        if last is None or abs(p - last)/max(abs(last), 1) > sensitivity:
-            filtered.append((t, idx, p))
-            last = p
-            
-    if len(filtered) < 6:
-        return [], "بيانات غير كافية للعد", "elliott-warn"
-
-    labels = []
-    status = "️ قيد التشكل أو غير مكتمل"
-    css = "elliott-warn"
-    
-    for i in range(len(filtered) - 5):
-        if filtered[i][0] != 'trough': continue
-        
-        w1_start = filtered[i]
-        w1_end = next((s for s in filtered[i:] if s[0]=='peak'), None)
-        if not w1_end: continue
-        
-        w2_end = next((s for s in filtered if s[1]>w1_end[1] and s[0]=='trough' and s[2] > w1_start[2]), None)
-        if not w2_end: continue
-        
-        w3_end = next((s for s in filtered if s[1]>w2_end[1] and s[0]=='peak' and s[2] > w1_end[2]), None)
-        if not w3_end: continue
-        
-        w4_end = next((s for s in filtered if s[1]>w3_end[1] and s[0]=='trough' and s[2] > w2_end[2] and s[2] < w1_end[2]), None)
-        if not w4_end: continue
-        
-        w5_end = next((s for s in filtered if s[1]>w4_end[1] and s[0]=='peak' and s[2] > w3_end[2]), None)
-        if not w5_end: continue
-        
-        len1 = w1_end[2] - w1_start[2]
-        len2 = w1_end[2] - w2_end[2]
-        len3 = w3_end[2] - w2_end[2]
-        len5 = w5_end[2] - w4_end[2]
-        
-        valid = True
-        reason = ""
-        if len2 > len1: valid=False; reason="الموجة 2 اخترقت بداية الموجة 1"
-        elif len3 < len1 and len3 < len5: valid=False; reason="الموجة 3 هي الأقصر"
-        elif w4_end[2] < w1_end[2]: valid=False; reason="الموجة 4 تداخلت مع نطاق الموجة 1"
-        
-        if valid:
-            labels = [
-                (w1_start[1], w1_start[2], '1'),
-                (w1_end[1], w1_end[2], '2'),
-                (w2_end[1], w2_end[2], '3'),
-                (w3_end[1], w3_end[2], '4'),
-                (w4_end[1], w4_end[2], '5')
-            ]
-            
-            a_end = next((s for s in filtered if s[1]>w5_end[1] and s[0]=='trough'), None)
-            b_end = next((s for s in filtered if s[1]>a_end[1] and s[0]=='peak' and s[2] < w5_end[2]), None)
-            c_end = next((s for s in filtered if s[1]>b_end[1] and s[0]=='trough' and s[2] < a_end[2]), None)
-            
-            if a_end and b_end and c_end:
-                labels.extend([(a_end[1], a_end[2], 'A'), (b_end[1], b_end[2], 'B'), (c_end[1], c_end[2], 'C')])
-                status = "✅ نمط 1-2-3-4-5 + ABC مكتمل وصحيح"
-                css = "elliott-valid"
-            else:
-                status = "✅ الموجات الدافعة 1-5 صحيحة | التصحيح ABC قيد التشكل"
-                css = "elliott-warn"
-            break
-        else:
-            status = f"❌ نمط محتمل لكنه مخالف للقاعدة: {reason}"
-            css = "elliott-invalid"
-            
-    return labels, status, css
-
-# 🧠 إدارة الحالة
-if 'df' not in st.session_state: st.session_state.df = None
-if 'meta' not in st.session_state: st.session_state.meta = {}
-if 'live_price' not in st.session_state: st.session_state.live_price = None
-
-# ️ الشريط الجانبي
 with st.sidebar:
-    st.header("⚙️ الإعدادات")
-    search = st.text_input("🔍 بحث عن أصل", "")
-    filtered = {k:v for k,v in ASSETS_DB.items() if not search or search.lower() in k.lower() or search.lower() in v.lower()}
-    selected_name = st.selectbox("الأصل", list(filtered.keys()) if filtered else list(ASSETS_DB.keys()))
-    symbol = filtered.get(selected_name, ASSETS_DB[selected_name])
+    st.header("⚙️ لوحة التحكم")
+    asset = st.selectbox("الرمز", ASSETS_DB.keys())
+    symbol = ASSETS_DB[asset]
     
-    use_custom = st.checkbox("📝 رمز مخصص")
-    if use_custom: symbol = st.text_input("الرمز", symbol).strip().upper()
+    timeframe = st.selectbox("الإطار الزمني", ["1d", "4h", "1h", "15m"])
     
-    period = st.selectbox("المدة", ["1mo", "3mo", "6mo", "1y"], index=2)
-    interval = st.selectbox("الإطار", ["1d", "4h", "1h", "15m"], index=0)
+    st.subheader("التحليلات")
+    show_gann = st.checkbox("زوايا Gann", True)
+    show_smc = st.checkbox("مناطق SMC/ICT", True)
+    show_elliott = st.checkbox("موجات Elliott", False)
     
-    if st.button("🔄 جلب البيانات وتحديث", type="primary"):
-        with st.spinner("⏳ جاري الاتصال بالبورصة..."):
-            try:
-                df_raw = yf.download(symbol, period=period, interval=interval, progress=False)
-                if df_raw.empty: st.error("❌ بيانات فارغة."); st.stop()
-                if isinstance(df_raw.columns, pd.MultiIndex): df_raw.columns = df_raw.columns.droplevel(1)
-                st.session_state.df = calc_indicators(df_raw)
-                st.session_state.meta = {"symbol": symbol, "interval": interval, "name": selected_name if not use_custom else symbol}
-                st.success("✅ تم تحديث البيانات!")
-            except Exception as e: st.error(f"❌ فشل الجلب: {e}")
-    
-    st.divider()
-    st.subheader("🎛️ المؤشرات (تفاعل فوري)")
-    show_gann = st.checkbox("📐 زوايا Gann", True)
-    show_smc = st.checkbox("🏦 مناطق SMC/ICT", True)
-    show_elliott = st.checkbox("🌊 موجات Elliott (1-5 + ABC)", False)
-    show_macd = st.checkbox("📉 مؤشر MACD", False)
+    if st.button("🔄 تحديث الشارت", type="primary"):
+        st.session_state['refresh'] = True
 
-# 🚀 المنطق الرئيسي
-if st.session_state.df is not None:
-    df = st.session_state.df
-    meta = st.session_state.meta
-    direction, score, price, sl, tp1, tp2, tp3, pip_size, SL_PIPS = get_ai_signal(df)
-    
-    is_buy = "شراء" in direction
-    css_class = "signal-box" if is_buy else "signal-box signal-sell"
-    dec = 4 if pip_size < 0.01 else 2
-    
-    #  صندوق التوصية الذكي
-    st.markdown(f"""
-    <div class="{css_class}">
-        <h3 style="margin:0; font-size:1.3rem;">🤖 توصية النظام: {direction} (قوة: {score}/100)</h3>
-        <div style="margin:10px 0; display:flex; gap:10px; flex-wrap:wrap;">
-            <span class="info-pill">📍 الدخول: <b>{price:.{dec}f}</b></span>
-            <span class="info-pill" style="color:#ff6b6b; border:1px solid #ff6b6b;"> وقف خسارة {SL_PIPS} بيب: <b>{sl:.{dec}f}</b></span>
-        </div>
-        <div style="margin-top:8px;">
-            <span style="color:#aaa; font-size:0.85rem;">🎯 أهداف جني الأرباح (إجمالي 500 بيب):</span><br>
-            <span class="tp-stage" style="color:#4cd137;">المرحلة 1: {tp1:.{dec}f} (+150 بيب)</span>
-            <span class="tp-stage" style="color:#fbc531;">المرحلة 2: {tp2:.{dec}f} (+300 بيب)</span>
-            <span class="tp-stage" style="color:#e84118;">المرحلة 3: {tp3:.{dec}f} (+500 بيب)</span>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+# المنطق الرئيسي
+if 'refresh' in st.session_state:
+    with st.spinner("جاري جلب البيانات..."):
+        df = yf.download(symbol, period="6mo", interval=timeframe, progress=False)
+        if df.empty:
+            st.error("لا توجد بيانات")
+            st.stop()
+        
+        # تحويل البيانات لصيغة TradingView (JSON)
+        chart_data = []
+        for index, row in df.iterrows():
+            time_str = index.strftime('%Y-%m-%d') if 'd' in timeframe else index.strftime('%Y-%m-%d %H:%M')
+            chart_data.append({
+                'time': time_str,
+                'open': float(row['Open']),
+                'high': float(row['High']),
+                'low': float(row['Low']),
+                'close': float(row['Close'])
+            })
 
-    # 💰 سعر مباشر متجدد
-    if st.session_state.live_price is None:
-        try:
-            st.session_state.live_price = yf.Ticker(symbol).fast_info['last_price']
-        except:
-            st.session_state.live_price = price
+        # تجهيز بيانات التحليل
+        df_analyzed, fvg_list, peaks, troughs = analyze_data(df)
+        
+        # تجهيز خطوط Gann
+        gann_data = []
+        if show_gann:
+            for index, row in df_analyzed.iterrows():
+                time_str = index.strftime('%Y-%m-%d') if 'd' in timeframe else index.strftime('%Y-%m-%d %H:%M')
+                gann_data.append({
+                    'time': time_str,
+                    'gann_up': float(row['Gann_Up']),
+                    'gann_down': float(row['Gann_Down'])
+                })
+
+        # تجهيز Elliott Points
+        elliott_points = []
+        if show_elliott:
+            for idx in peaks.index:
+                time_str = idx.strftime('%Y-%m-%d') if 'd' in timeframe else idx.strftime('%Y-%m-%d %H:%M')
+                elliott_points.append({'time': time_str, 'price': float(peaks.loc[idx, 'High']), 'text': 'Peak', 'color': 'red', 'shape': 'arrowDown'})
+            for idx in troughs.index:
+                time_str = idx.strftime('%Y-%m-%d') if 'd' in timeframe else idx.strftime('%Y-%m-%d %H:%M')
+                elliott_points.append({'time': time_str, 'price': float(troughs.loc[idx, 'Low']), 'text': 'Trough', 'color': 'blue', 'shape': 'arrowUp'})
+
+        # حزم البيانات للواجهة
+        payload = {
+            'candles': chart_data,
+            'gann': gann_data,
+            'fvg': [{'start': d['start_idx'], 'end': d['end_idx'], 'top': d['top'], 'bottom': d['bottom']} for d in fvg_list],
+            'elliott': elliott_points,
+            'options': {
+                'gann': show_gann,
+                'smc': show_smc,
+                'elliott': show_elliott
+            }
+        }
+        st.session_state['chart_payload'] = json.dumps(payload)
+        del st.session_state['refresh']
+
+# واجهة عرض الشارت
+if 'chart_payload' in st.session_state:
+    payload = st.session_state['chart_payload']
+    
+    # كود HTML/JS الخاص بـ TradingView
+    tv_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; background: #131722; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }}
+            #chart-container {{ width: 100%; height: 85vh; }}
+            .price-display {{ position: absolute; top: 20px; right: 20px; z-index: 10; background: #1e222d; padding: 10px 20px; border-radius: 4px; border: 1px solid #2a2e39; color: #d1d4dc; }}
+            .price-val {{ font-size: 24px; font-weight: bold; color: #2962ff; }}
+        </style>
+    </head>
+    <body>
+        <div class="price-display">السعر الحالي: <span id="current-price" class="price-val">...</span></div>
+        <div id="chart-container"></div>
+        <script>
+            const data = {payload};
+            const chartContainer = document.getElementById('chart-container');
             
-    st.markdown(f"""
-    <div class="live-ticker">
-        <div class="live-dot"></div>
-        <span style="color:#aaa; font-size:0.9rem;">السعر المباشر:</span>
-        <span style="color:#fff; font-weight:bold; font-size:1.1rem;">{st.session_state.live_price:.{dec}f}</span>
-        <span style="color:#666; font-size:0.8rem;">({meta['interval']})</span>
-    </div>
-    """, unsafe_allow_html=True)
+            // إعداد الشارت
+            const chart = LightweightCharts.createChart(chartContainer, {{
+                width: chartContainer.clientWidth,
+                height: chartContainer.clientHeight,
+                layout: {{
+                    background: {{ color: '#131722' }},
+                    textColor: '#d1d4dc',
+                }},
+                grid: {{
+                    vertLines: {{ color: '#1f2943' }},
+                    horzLines: {{ color: '#1f2943' }},
+                }},
+                crosshair: {{
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                }},
+                timeScale: {{
+                    borderColor: '#2B2B43',
+                    timeVisible: true,
+                    secondsVisible: false,
+                }},
+            }});
 
-    # 📈 بناء الشارت المحسّن للسلاسة
-    rows, heights = (3, [0.5, 0.2, 0.3]) if show_macd else (2, [0.7, 0.3])
-    titles = ("السعر", "MACD", "الحجم") if show_macd else ("السعر", "RSI")
-    fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
-                        row_heights=heights, subplot_titles=titles)
-    
-    fig.add_trace(go.Candlestick(
-        x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
-        name="السعر",
-        increasing_line_color='#00c853', decreasing_line_color='#ff1744',
-        increasing_fillcolor='#00c853', decreasing_fillcolor='#ff1744',
-        line=dict(width=1)
-    ), row=1, col=1)
-    
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['SMA_50'], mode='lines', name='SMA 50',
-        line=dict(color='#ffeb3b', width=1.5, dash='dot')
-    ), row=1, col=1)
-    
-    # خطوط السعر الأساسية
-    fig.add_hline(y=price, line_dash="solid", line_color="#2196f3", line_width=1.5, row=1, col=1)
-    fig.add_hline(y=sl, line_dash="dash", line_color="#ff1744", line_width=1.5, row=1, col=1)
-    fig.add_hline(y=tp3, line_dash="dot", line_color="#e84118", line_width=1.5, row=1, col=1)
-        
-    if show_gann:
-        rng = df['High'].max() - df['Low'].min()
-        gann = df['Low'].min() + np.arange(len(df)) * (rng/len(df))
-        fig.add_trace(go.Scatter(
-            x=df.index, y=gann, mode="lines", name="Gann 1x1",
-            line=dict(color="#9c27b0", dash="dash", width=1.5)
-        ), row=1, col=1)
-        
-    if show_smc:
-        for i in range(2, len(df), 2):
-            if float(df['Low'].iloc[i]) > float(df['High'].iloc[i-2]):
-                fig.add_shape(type="rect", xref="x", yref="y",
-                    x0=df.index[i-2], y0=float(df['High'].iloc[i-2]),
-                    x1=df.index[i], y1=float(df['Low'].iloc[i]),
-                    fillcolor="rgba(0, 200, 83, 0.06)", line=dict(width=0),
-                    layer="below", row=1, col=1)
-                
-    if show_elliott:
-        labels, status, css = detect_elliott_waves(df)
-        st.markdown(f'<div class="elliott-status {css}">{status}</div>', unsafe_allow_html=True)
-        
-        if labels:
-            idxs = [l[0] for l in labels]
-            prices = [l[1] for l in labels]
-            texts = [l[2] for l in labels]
-            positions = ['top' if df.loc[i, 'High'] == p else 'bottom' for i, p in zip(idxs, prices)]
-            fig.add_trace(go.Scatter(
-                x=idxs, y=prices, mode="markers+text", text=texts,
-                textposition=positions,
-                textfont=dict(size=12, color="#fff", family="Arial"),
-                marker=dict(color="#FFD700", size=12, line=dict(width=2, color="#000")),
-                name="Elliott", hoverinfo="text"
-            ), row=1, col=1)
+            // إضافة الشموع
+            const candleSeries = chart.addCandlestickSeries({{
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            }});
+            candleSeries.setData(data.candles);
 
-    rsi_row = 2 if not show_macd else 3
-    fig.add_trace(go.Scatter(
-        x=df.index, y=df['RSI'], mode="lines", name="RSI",
-        line=dict(color="#00bcd4", width=1.5)
-    ), row=rsi_row, col=1)
-    fig.add_hline(y=70, line_dash="dot", line_color="#ff1744", row=rsi_row, col=1)
-    fig.add_hline(y=30, line_dash="dot", line_color="#00c853", row=rsi_row, col=1)
+            // إضافة Gann
+            if (data.options.gann) {{
+                const gannSeries = chart.addLineSeries({{ color: '#a044ff', lineWidth: 1, priceLineVisible: false }});
+                const gannData = data.gann.map(d => ({{ time: d.time, value: d.gann_up }}));
+                gannSeries.setData(gannData);
+            }}
+
+            // إضافة Elliott Markers
+            if (data.options.elliott) {{
+                candleSeries.setMarkers(data.elliott);
+            }}
+
+            // تحديث السعر عند تحريك الماوس
+            chart.subscribeCrosshairMove(param => {{
+                if (param.time && param.seriesData.size > 0) {{
+                    const price = param.seriesData.get(candleSeries).close;
+                    document.getElementById('current-price').textContent = price;
+                }}
+            }});
+
+            // ضبط الحجم عند تغيير النافذة
+            window.addEventListener('resize', () => {{
+                chart.resize(chartContainer.clientWidth, chartContainer.clientHeight);
+            }});
+        </script>
+    </body>
+    </html>
+    """
     
-    if show_macd:
-        hist = df['MACD'] - df['MACD_Signal']
-        colors = ['#00c853' if x>0 else '#ff1744' for x in hist]
-        fig.add_trace(go.Bar(
-            x=df.index, y=hist, name="MACD Hist", marker_color=colors
-        ), row=2, col=1)
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['MACD'], mode="lines", name="MACD",
-            line=dict(color="#2196f3", width=1.5)
-        ), row=2, col=1)
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['MACD_Signal'], mode="lines", name="Signal",
-            line=dict(color="#ff9800", width=1.5, dash="dot")
-        ), row=2, col=1)
-        
-    vol_row = rows
-    if 'Volume' in df.columns:
-        v_colors = ['#00c853' if c>=o else '#ff1744' for c,o in zip(df['Close'], df['Open'])]
-        fig.add_trace(go.Bar(
-            x=df.index, y=df['Volume'], name="Volume", marker_color=v_colors
-        ), row=vol_row, col=1)
-        
-    # ️ إعدادات السلاسة والتفاعل
-    config = {
-        'scrollZoom': True,
-        'displayModeBar': True,
-        'displaylogo': False,
-        'modeBarButtonsToRemove': ['zoomIn', 'zoomOut', 'autoScale', 'resetScale', 'hoverClosest', 'hoverCompare', 'zoom2d', 'pan2d', 'select2d', 'lasso2d'],
-        'doubleClick': 'reset',
-        'showTips': False,
-        'responsive': True
-    }
-
-    fig.update_layout(
-        height=800,
-        template="plotly_dark",
-        plot_bgcolor='#0a0a0a',
-        paper_bgcolor='#0a0a0a',
-        font=dict(family="Segoe UI, sans-serif", size=12, color="#ccc"),
-        xaxis_rangeslider_visible=False,
-        hovermode="x",
-        hoverlabel=dict(bgcolor="#111", font_size=11, font_family="monospace"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor="rgba(0,0,0,0.2)"),
-        margin=dict(l=10, r=10, t=30, b=10),
-        xaxis=dict(showgrid=True, gridcolor='#222', zeroline=False),
-        yaxis=dict(showgrid=True, gridcolor='#222', zeroline=False),
-        uirevision=True,      # ✅ يحافظ على التكبير/التحريك عند التحديث
-        dragmode='pan'        # ✅ سحب سلس وبدون تقطيع
-    )
+    st.components.v1.html(tv_html, height=900, scrolling=False)
     
-    for i in range(1, rows+1):
-        fig.update_yaxes(showgrid=True, gridcolor='#1a1a1a', zeroline=False, row=i, col=1)
-        
-    st.plotly_chart(fig, use_container_width=True, config=config)
-
-    tab_risk, tab_matrix, tab_export = st.tabs(["🛡️ إدارة المخاطر", "📡 مصفوفة الأطر", "💾 تصدير"])
-    
-    with tab_risk:
-        st.subheader("️ حاسبة إدارة رأس المال")
-        c1, c2, c3 = st.columns(3)
-        lot_size = c1.number_input(" حجم اللوت", min_value=0.01, value=0.01, step=0.01)
-        total_risk_usd = lot_size * SL_PIPS * 10.0
-        potential_profit_usd = lot_size * 500 * 10.0
-        
-        col_a, col_b, col_c = st.columns(3)
-        col_a.metric("💸 مخاطرة (SL)", f"${total_risk_usd:.2f}")
-        col_b.metric("💰 ربح (TP3)", f"${potential_profit_usd:.2f}")
-        col_c.metric("📊 R:R", f"{500/SL_PIPS:.1f}")
-        st.caption(f"📏 اللوت × البييبات × $10 = ${total_risk_usd:.2f}")
-
-    with tab_matrix:
-        st.subheader("📡 توافق الإشارات عبر الأطر")
-        tf_data = []
-        for tf in ["15m", "1h", "4h", "1d"]:
-            try:
-                d = yf.download(meta['symbol'], period="1mo", interval=tf, progress=False)
-                if d.empty or len(d) < 20: continue
-                if isinstance(d.columns, pd.MultiIndex): d.columns = d.columns.droplevel(1)
-                d = calc_indicators(d)
-                _, sc, _, _, _, _, _, _, _ = get_ai_signal(d)
-                sig = "شراء 🟢" if sc>=60 else "بيع 🔴" if sc<=40 else "محايد ⚪"
-                tf_data.append({"الإطار": tf, "التقييم": f"{sc}/100", "الاتجاه": sig})
-            except: pass
-        if len(tf_data) > 0:
-            st.dataframe(pd.DataFrame(tf_data), use_container_width=True, hide_index=True)
-        else:
-            st.info("لا تتوفر بيانات كافية حالياً.")
-
-    with tab_export:
-        csv = df.to_csv().encode('utf-8')
-        st.download_button("📥 تحميل البيانات (CSV)", csv, f"{meta['symbol']}_data.csv", "text/csv")
-        st.download_button("🖼️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{meta['symbol']}_chart.html", "text/html")
+    # معلومات إضافية أسفل الشارت
+    st.markdown("---")
+    st.info(" هذا الشارت يعمل بمحرك TradingView الحقيقي. استخدم عجلة الماوس للتكبير، واسحب للتحريك.")
 
 else:
-    st.info("👈 اختر الأصل واضغط 🔄 جلب البيانات لبدء التحليل.")
+    st.info("👈 اختر الأصل والإطار الزمني، ثم اضغط 'تحديث الشارت' لبدء العرض.")
