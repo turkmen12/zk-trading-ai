@@ -5,7 +5,207 @@ import numpy as np
 import json
 import warnings
 warnings.filterwarnings('ignore')
+import streamlit as st
+import yfinance as yf
+import pandas as pd
+import numpy as np
+import json
+import time
+import warnings
+warnings.filterwarnings('ignore')
 
+st.set_page_config(page_title="ProTrader TV Replica", layout="wide", page_icon="📈")
+
+#  حماية من الحظر: تخزين مؤقت للبيانات لمدة 5 دقائق
+@st.cache_data(ttl=300)
+def fetch_market_data(symbol, interval):
+    for attempt in range(3):
+        try:
+            time.sleep(0.5)  # تأخير بسيط لتجنب الكشف الآلي
+            ticker = yf.Ticker(symbol)
+            df = ticker.history(period="6mo", interval=interval)
+            if df.empty:
+                return None
+            return df
+        except Exception as e:
+            err_msg = str(e).lower()
+            if "too many requests" in err_msg or "rate" in err_msg:
+                if attempt < 2:
+                    time.sleep(2 ** attempt)  # انتظار تصاعدي
+                else:
+                    raise RuntimeError("RATE_LIMIT")
+            else:
+                raise e
+
+ASSETS_DB = {
+    "الذهب (Gold)": "GC=F", "الفضة (Silver)": "SI=F", "النفط (Oil)": "CL=F",
+    "S&P 500": "^GSPC", "Nasdaq": "^IXIC", "Bitcoin": "BTC-USD",
+    "Ethereum": "ETH-USD", "EUR/USD": "EURUSD=X", "Tesla": "TSLA"
+}
+
+def process_indicators(df, timeframe, show_gann, show_smc, show_elliott):
+    fmt = '%Y-%m-%d' if 'd' in timeframe else '%Y-%m-%d %H:%M'
+    res = {'gann': [], 'fvg': [], 'elliott': []}
+    
+    if show_gann:
+        high, low = df['High'].max(), df['Low'].min()
+        rng = high - low
+        n = len(df)
+        for i, idx in enumerate(df.index):
+            res['gann'].append({'time': idx.strftime(fmt), 'value': float(low + i * (rng/n))})
+            
+    if show_smc:
+        for i in range(2, len(df)):
+            if df['Low'].iloc[i] > df['High'].iloc[i-2]:
+                res['fvg'].append({
+                    'time': df.index[i].strftime(fmt),
+                    'top': float(df['High'].iloc[i-2]),
+                    'bottom': float(df['Low'].iloc[i])
+                })
+                
+    if show_elliott:
+        peaks = df[df['High'] == df['High'].rolling(5, center=True).max()]
+        troughs = df[df['Low'] == df['Low'].rolling(5, center=True).min()]
+        for idx in peaks.index:
+            res['elliott'].append({'time': idx.strftime(fmt), 'position': 'aboveBar', 'color': '#ef5350', 'shape': 'arrowDown', 'text': 'P'})
+        for idx in troughs.index:
+            res['elliott'].append({'time': idx.strftime(fmt), 'position': 'belowBar', 'color': '#26a69a', 'shape': 'arrowUp', 'text': 'T'})
+            
+    return res
+
+with st.sidebar:
+    st.header("⚙️ لوحة التحكم")
+    asset = st.selectbox("الرمز", ASSETS_DB.keys())
+    symbol = ASSETS_DB[asset]
+    timeframe = st.selectbox("الإطار الزمني", ["1d", "4h", "1h", "15m"])
+    
+    st.subheader("التحليلات")
+    show_gann = st.checkbox("زوايا Gann", True)
+    show_smc = st.checkbox("مناطق SMC/ICT", True)
+    show_elliott = st.checkbox("موجات Elliott", False)
+    
+    # منع النقر المتكرر
+    btn_disabled = st.session_state.get('cooldown', False)
+    if st.button("🔄 تحديث الشارت", type="primary", disabled=btn_disabled):
+        st.session_state['run'] = True
+        st.session_state['cooldown'] = True
+        time.sleep(3)  # حماية إضافية
+        st.session_state['cooldown'] = False
+
+if st.session_state.get('run'):
+    with st.spinner("جاري جلب البيانات الآمنة..."):
+        try:
+            df = fetch_market_data(symbol, timeframe)
+            if df is None or df.empty:
+                st.error("⚠️ لا توجد بيانات. جرب إطاراً يومياً (1d) أو رمزاً آخر.")
+                st.stop()
+                
+            required = ['Open', 'High', 'Low', 'Close']
+            if not all(c in df.columns for c in required):
+                st.error("❌ تنسيق البيانات غير مدعوم.")
+                st.stop()
+                
+            df = df.dropna(subset=required)
+            if len(df) < 10:
+                st.error("⚠️ بيانات غير كافية.")
+                st.stop()
+                
+            candles = []
+            fmt = '%Y-%m-%d' if 'd' in timeframe else '%Y-%m-%d %H:%M'
+            for idx, row in df.iterrows():
+                candles.append({
+                    'time': idx.strftime(fmt),
+                    'open': float(row['Open']), 'high': float(row['High']),
+                    'low': float(row['Low']), 'close': float(row['Close'])
+                })
+                
+            indicators = process_indicators(df, timeframe, show_gann, show_smc, show_elliott)
+            
+            payload = {
+                'candles': candles,
+                'indicators': indicators,
+                'options': {'gann': show_gann, 'smc': show_smc, 'elliott': show_elliott},
+                'symbol': symbol
+            }
+            st.session_state['chart_data'] = json.dumps(payload)
+            del st.session_state['run']
+            
+        except RuntimeError as e:
+            if str(e) == "RATE_LIMIT":
+                st.error("🚫 تم حظر الطلب مؤقتاً من Yahoo Finance. انتظر دقيقة ثم حاول مجدداً.")
+                st.info("💡 نصيحة: البيانات مخزنة مؤقتاً لمدة 5 دقائق لتجنب هذا الخطأ.")
+            else:
+                st.error(f"❌ فشل الاتصال: {e}")
+        except Exception as e:
+            st.error(f"❌ خطأ غير متوقع: {e}")
+
+if 'chart_data' in st.session_state:
+    data_json = st.session_state['chart_data']
+    
+    tv_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; background: #131722; overflow: hidden; }}
+            #chart-container {{ width: 100%; height: 82vh; }}
+            .hud {{ position: absolute; top: 12px; left: 12px; z-index: 10; 
+                   background: rgba(19, 23, 34, 0.95); padding: 8px 14px; border-radius: 6px; 
+                   border: 1px solid #2a2e39; color: #d1d4dc; font-family: -apple-system, sans-serif; font-size: 13px; }}
+            .price {{ font-weight: bold; color: #2962ff; font-size: 15px; margin-left: 8px; }}
+        </style>
+    </head>
+    <body>
+        <div class="hud"> <span id="sym">---</span> | السعر: <span id="price" class="price">---</span></div>
+        <div id="chart-container"></div>
+        <script>
+            const data = {data_json};
+            const container = document.getElementById('chart-container');
+            
+            const chart = LightweightCharts.createChart(container, {{
+                width: container.clientWidth, height: container.clientHeight,
+                layout: {{ background: {{ color: '#131722' }}, textColor: '#d1d4dc' }},
+                grid: {{ vertLines: {{ color: '#1f2943' }}, horzLines: {{ color: '#1f2943' }} }},
+                crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+                timeScale: {{ timeVisible: true, secondsVisible: false, borderColor: '#2B2B43' }},
+            }});
+
+            const candleSeries = chart.addCandlestickSeries({{
+                upColor: '#26a69a', downColor: '#ef5350',
+                borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+            }});
+            candleSeries.setData(data.candles);
+            document.getElementById('sym').textContent = data.symbol;
+
+            if (data.options.gann && data.indicators.gann.length > 0) {{
+                const gannSeries = chart.addLineSeries({{ color: '#a044ff', lineWidth: 1, lineStyle: 2 }});
+                gannSeries.setData(data.indicators.gann);
+            }}
+
+            if (data.options.elliott && data.indicators.elliott.length > 0) {{
+                candleSeries.setMarkers(data.indicators.elliott);
+            }}
+
+            chart.subscribeCrosshairMove(param => {{
+                if (param.time && param.seriesData.has(candleSeries)) {{
+                    const d = param.seriesData.get(candleSeries);
+                    document.getElementById('price').textContent = d.close.toFixed(2);
+                }}
+            }});
+
+            window.addEventListener('resize', () => {{
+                chart.resize(container.clientWidth, container.clientHeight);
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    st.components.v1.html(tv_html, height=850, scrolling=False)
+    st.success("✅ تم تحميل الشارت بنجاح. البيانات مخزنة مؤقتاً لتسريع التحميل وتجنب الحظر.")
+else:
+    st.info("👈 اختر الأصل والإطار الزمني، ثم اضغط '🔄 تحديث الشارت' للبدء.")
 st.set_page_config(page_title="ProTrader TV Replica", layout="wide", page_icon="📈")
 
 ASSETS_DB = {
