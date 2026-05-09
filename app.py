@@ -4,11 +4,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import pandas as pd
 import numpy as np
+import time
 import warnings
 warnings.filterwarnings('ignore')
 
 # 🎨 إعدادات الواجهة
-st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="📈")
+st.set_page_config(page_title="ProTrader AI", layout="wide", page_icon="")
 st.markdown("""
 <style>
     .stTabs [data-baseweb="tab-list"] button {font-size: 14px; font-weight: 600; padding: 8px 16px;}
@@ -20,14 +21,17 @@ st.markdown("""
     .elliott-valid {background: rgba(0,255,0,0.1); border: 1px solid #00ff00; color: #00ff00;}
     .elliott-warn {background: rgba(255,165,0,0.1); border: 1px solid #ffa500; color: #ffa500;}
     .elliott-invalid {background: rgba(255,0,0,0.1); border: 1px solid #ff4444; color: #ff4444;}
+    .live-ticker {background: #0a0a0a; border: 1px solid #333; border-radius: 8px; padding: 10px 15px; display: inline-flex; align-items: center; gap: 10px; margin: 10px 0;}
+    .live-dot {width: 10px; height: 10px; background: #00ff00; border-radius: 50%; animation: pulse 1.5s infinite;}
+    @keyframes pulse {0% {opacity: 1;} 50% {opacity: 0.4;} 100% {opacity: 1;}}
 </style>
 """, unsafe_allow_html=True)
 
 # 📦 قاعدة الأصول
 ASSETS_DB = {
-    "🥇 الذهب (Gold)": "GC=F", "🥈 الفضة (Silver)": "SI=F", "️ النفط (Oil)": "CL=F",
-    "📈 S&P 500": "^GSPC", "💻 Nasdaq": "^IXIC", "🇬🇧 FTSE 100": "^FTSE",
-    " Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
+    "🥇 الذهب (Gold)": "GC=F", "🥈 الفضة (Silver)": "SI=F", "🛢️ النفط (Oil)": "CL=F",
+    "📈 S&P 500": "^GSPC", " Nasdaq": "^IXIC", "🇬🇧 FTSE 100": "^FTSE",
+    "₿ Bitcoin": "BTC-USD", "Ξ Ethereum": "ETH-USD", "💶 EUR/USD": "EURUSD=X",
     "💷 GBP/USD": "GBPUSD=X", "🍎 Apple": "AAPL", "🚗 Tesla": "TSLA"
 }
 
@@ -70,7 +74,7 @@ def get_ai_signal(df):
     if macd > sig: score += 10
     else: score -= 10
     
-    direction = "شراء 🟢" if score >= 60 else "بيع 🔴" if score <= 40 else "انتظار "
+    direction = "شراء 🟢" if score >= 60 else "بيع 🔴" if score <= 40 else "انتظار ⚪"
     mult = 1 if "شراء" in direction else -1
     
     pip_size = get_pip_size(price)
@@ -171,11 +175,12 @@ def detect_elliott_waves(df, sensitivity=0.015):
 # 🧠 إدارة الحالة
 if 'df' not in st.session_state: st.session_state.df = None
 if 'meta' not in st.session_state: st.session_state.meta = {}
+if 'live_price' not in st.session_state: st.session_state.live_price = None
 
-# 🖥️ الشريط الجانبي
+# ️ الشريط الجانبي
 with st.sidebar:
     st.header("⚙️ الإعدادات")
-    search = st.text_input(" بحث عن أصل", "")
+    search = st.text_input("🔍 بحث عن أصل", "")
     filtered = {k:v for k,v in ASSETS_DB.items() if not search or search.lower() in k.lower() or search.lower() in v.lower()}
     selected_name = st.selectbox("الأصل", list(filtered.keys()) if filtered else list(ASSETS_DB.keys()))
     symbol = filtered.get(selected_name, ASSETS_DB[selected_name])
@@ -214,12 +219,13 @@ if st.session_state.df is not None:
     css_class = "signal-box" if is_buy else "signal-box signal-sell"
     dec = 4 if pip_size < 0.01 else 2
     
+    #  صندوق التوصية الذكي
     st.markdown(f"""
     <div class="{css_class}">
         <h3 style="margin:0; font-size:1.3rem;">🤖 توصية النظام: {direction} (قوة: {score}/100)</h3>
         <div style="margin:10px 0; display:flex; gap:10px; flex-wrap:wrap;">
-            <span class="info-pill"> الدخول: <b>{price:.{dec}f}</b></span>
-            <span class="info-pill" style="color:#ff6b6b; border:1px solid #ff6b6b;">🛑 وقف خسارة {SL_PIPS} بيب: <b>{sl:.{dec}f}</b></span>
+            <span class="info-pill">📍 الدخول: <b>{price:.{dec}f}</b></span>
+            <span class="info-pill" style="color:#ff6b6b; border:1px solid #ff6b6b;"> وقف خسارة {SL_PIPS} بيب: <b>{sl:.{dec}f}</b></span>
         </div>
         <div style="margin-top:8px;">
             <span style="color:#aaa; font-size:0.85rem;">🎯 أهداف جني الأرباح (إجمالي 500 بيب):</span><br>
@@ -230,12 +236,28 @@ if st.session_state.df is not None:
     </div>
     """, unsafe_allow_html=True)
 
+    # 💰 سعر مباشر متجدد
+    if st.session_state.live_price is None:
+        try:
+            st.session_state.live_price = yf.Ticker(symbol).fast_info['last_price']
+        except:
+            st.session_state.live_price = price
+            
+    st.markdown(f"""
+    <div class="live-ticker">
+        <div class="live-dot"></div>
+        <span style="color:#aaa; font-size:0.9rem;">السعر المباشر:</span>
+        <span style="color:#fff; font-weight:bold; font-size:1.1rem;">{st.session_state.live_price:.{dec}f}</span>
+        <span style="color:#666; font-size:0.8rem;">({meta['interval']})</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # 📈 بناء الشارت المحسّن للسلاسة
     rows, heights = (3, [0.5, 0.2, 0.3]) if show_macd else (2, [0.7, 0.3])
     titles = ("السعر", "MACD", "الحجم") if show_macd else ("السعر", "RSI")
     fig = make_subplots(rows=rows, cols=1, shared_xaxes=True, vertical_spacing=0.03, 
                         row_heights=heights, subplot_titles=titles)
     
-    # شموع محسّنة للأداء
     fig.add_trace(go.Candlestick(
         x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'],
         name="السعر",
@@ -263,13 +285,12 @@ if st.session_state.df is not None:
         ), row=1, col=1)
         
     if show_smc:
-        # تحسين الأداء: رسم المستطيلات بشفافية أقل وتقليل العبء
-        for i in range(2, len(df), 2):  # نأخذ كل شمعة ثانية لتخفيف الحمل
+        for i in range(2, len(df), 2):
             if float(df['Low'].iloc[i]) > float(df['High'].iloc[i-2]):
                 fig.add_shape(type="rect", xref="x", yref="y",
                     x0=df.index[i-2], y0=float(df['High'].iloc[i-2]),
                     x1=df.index[i], y1=float(df['Low'].iloc[i]),
-                    fillcolor="rgba(0, 200, 83, 0.08)", line=dict(width=0),
+                    fillcolor="rgba(0, 200, 83, 0.06)", line=dict(width=0),
                     layer="below", row=1, col=1)
                 
     if show_elliott:
@@ -319,14 +340,15 @@ if st.session_state.df is not None:
             x=df.index, y=df['Volume'], name="Volume", marker_color=v_colors
         ), row=vol_row, col=1)
         
-    # إعدادات تحسين الأداء والتفاعل
+    # ️ إعدادات السلاسة والتفاعل
     config = {
-        'displayModeBar': True,
         'scrollZoom': True,
+        'displayModeBar': True,
         'displaylogo': False,
-        'modeBarButtonsToRemove': ['zoomIn', 'zoomOut', 'autoScale', 'resetScale', 'hoverClosest', 'hoverCompare'],
+        'modeBarButtonsToRemove': ['zoomIn', 'zoomOut', 'autoScale', 'resetScale', 'hoverClosest', 'hoverCompare', 'zoom2d', 'pan2d', 'select2d', 'lasso2d'],
         'doubleClick': 'reset',
-        'showTips': False
+        'showTips': False,
+        'responsive': True
     }
 
     fig.update_layout(
@@ -336,12 +358,14 @@ if st.session_state.df is not None:
         paper_bgcolor='#0a0a0a',
         font=dict(family="Segoe UI, sans-serif", size=12, color="#ccc"),
         xaxis_rangeslider_visible=False,
-        hovermode="x",  # أسرع بكثير من unified
+        hovermode="x",
         hoverlabel=dict(bgcolor="#111", font_size=11, font_family="monospace"),
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, bgcolor="rgba(0,0,0,0.2)"),
         margin=dict(l=10, r=10, t=30, b=10),
         xaxis=dict(showgrid=True, gridcolor='#222', zeroline=False),
-        yaxis=dict(showgrid=True, gridcolor='#222', zeroline=False)
+        yaxis=dict(showgrid=True, gridcolor='#222', zeroline=False),
+        uirevision=True,      # ✅ يحافظ على التكبير/التحريك عند التحديث
+        dragmode='pan'        # ✅ سحب سلس وبدون تقطيع
     )
     
     for i in range(1, rows+1):
@@ -352,7 +376,7 @@ if st.session_state.df is not None:
     tab_risk, tab_matrix, tab_export = st.tabs(["🛡️ إدارة المخاطر", "📡 مصفوفة الأطر", "💾 تصدير"])
     
     with tab_risk:
-        st.subheader("🛡️ حاسبة إدارة رأس المال")
+        st.subheader("️ حاسبة إدارة رأس المال")
         c1, c2, c3 = st.columns(3)
         lot_size = c1.number_input(" حجم اللوت", min_value=0.01, value=0.01, step=0.01)
         total_risk_usd = lot_size * SL_PIPS * 10.0
@@ -388,4 +412,4 @@ if st.session_state.df is not None:
         st.download_button("🖼️ تحميل الشارت (HTML)", fig.to_html(include_plotlyjs='cdn'), f"{meta['symbol']}_chart.html", "text/html")
 
 else:
-    st.info("👈 اختر الأصل واضغط  جلب البيانات لبدء التحليل.")
+    st.info("👈 اختر الأصل واضغط 🔄 جلب البيانات لبدء التحليل.")
